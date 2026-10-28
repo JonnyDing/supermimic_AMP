@@ -1,152 +1,153 @@
-# AMP_mjlab
+# SuperMimic AMP — WMRL for Unitree G1
 
-[中文 README](README_zh.md)
+[中文说明](README_zh.md)
 
-Deployment integration code is in [ccrpRepo/wbc_fsm](https://github.com/ccrpRepo/wbc_fsm), under `MJAmp State`.
+World-model reinforcement learning for G1 velocity tracking and fall recovery, built on mjlab. The active training backend is WMRL: real simulation collection, learned dynamics, imagined rollouts, and actor updates through backpropagation through time (BPTT). AMP supplies a differentiable motion-style reward.
 
-G1 AMP motion control project built on top of mjlab + rsl_rl.
+## Current implementation
 
-Key features of this repository:
+- Real transitions populate a sequence replay buffer and train the world model.
+- The actor optimizes imagined task and AMP rewards with critic bootstrapping and a frozen teacher anchor.
+- The discriminator trains separately on real policy/expert transitions with a least-squares objective and gradient penalty. During imagination its parameters are frozen while input gradients remain available.
+- One policy produces 29 joint actions from four observation frames (384 inputs), at 50 Hz.
+- Training currently supports `Unitree-G1-AMP-Flat`, one CUDA GPU, and TensorBoard. Default settings use FP32, compilation, and an imagination horizon of 8.
 
-- A single policy learns both locomotion (walk/run) and recovery (fall-and-get-up)
-- AMP discriminator regularizes motion style and priors
-- Training and deployment pipelines are consistent, with direct ONNX policy export support
+PPO optimizers and training runners have been removed. The remaining `rsl_rl` code provides compatible networks and normalization; its `OnPolicyRunner` placeholder exists only for mjlab imports. This implementation uses existing policies for initialization and teacher anchoring, rather than training from scratch.
 
-## Core Idea
+## Environment
 
-Instead of training separate policies for locomotion and recovery and switching between them, this project learns both capabilities in one unified policy.
-
-Implementation highlights:
-
-- Motion data split:
-  - Walk/Run data: `src/assets/motions/g1/amp/WalkandRun`
-  - Recovery data: `src/assets/motions/g1/amp/Recovery`
-- Delayed termination/reset:
-  - A subset of environments does not reset immediately after termination
-  - These environments receive a recovery window and reset states sampled from recovery clips
-- Unified AMP training:
-  - One actor-critic + One AMP discriminator
-  - Velocity tracking, perturbation robustness, and recovery are learned together
-
-This reduces discontinuities caused by policy switching and yields more consistent behavior.
-
-## Requirements
-
-- Linux
-- Python 3.11 (recommended)
-- Working MuJoCo and GPU driver setup
-
-## Quick Start
-
-### 1. Install
+Use Linux, Python 3.11, a CUDA-capable PyTorch installation, and a working GPU driver. Run commands from the repository root in an existing mjlab environment. `setup.py` pins mjlab 1.2.0, mujoco-warp 3.8.1, warp-lang 1.12.0, and SciPy 1.17.0.
 
 ```bash
 conda activate mjlab
-cd AMP_mjlab
 python -m pip install -e .
+python -m pip install onnx onnxruntime tensorboard
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-### 2. Apply mjlab Patch (Optional)
-
-If you do not apply this patch, remove `history_ordering` configuration from the code.
-
-What this patch does:
-
-- It adds an option for how observation history is flattened: by time (`time`) or by term (`term`).
-- Default mjlab behavior supports only `term` ordering.
-
-Patch file:
-
-- `mjlab_patch/mjlab/managers/observation_manager.py`
-
-Example command:
+The repository root on `PYTHONPATH` selects the local compatibility modules. The G1 observation configuration requires the supplied **time-ordered observation history patch**. If your mjlab installation does not already include it, back up and replace the manager in the active environment:
 
 ```bash
-cp mjlab_patch/mjlab/managers/observation_manager.py \
-  /home/crp/miniconda3/envs/mjlab/lib/python3.11/site-packages/mjlab/managers/observation_manager.py
+python - <<'PYTHON'
+from pathlib import Path
+import shutil
+import mjlab
+source = Path('mjlab_patch/mjlab/managers/observation_manager.py')
+target = Path(mjlab.__file__).resolve().parent / 'managers/observation_manager.py'
+shutil.copy2(target, target.with_suffix('.py.bak'))
+shutil.copy2(source, target)
+print(target)
+PYTHON
 ```
 
-### 3. List Available Tasks
+Do not remove `history_ordering="time"` to bypass the patch: observation ordering must match the checkpoint.
+
+Motion assets are expected under:
+
+- `src/assets/motions/g1/amp/WalkandRun/`
+- `src/assets/motions/g1/amp/Recovery/`
+
+## Checkpoint and training prerequisites
+
+The committed inference/export checkpoint is:
+
+```text
+logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt
+```
+
+The current trainer also expects these initialization assets at fixed paths:
+
+- `logs/rsl_rl/g1_amp_locomotion/2026-10-24_13-24-33/model_66600.pt`
+- `logs/supermimic/p3_online_conservative_20261026/actor_final.pt`
+
+The first supplies the teacher and original AMP state; the second supplies the initial policy/world-model learning state. These historical assets are not supplied by the single published checkpoint and must be restored before starting a new training run. Resume also checks its recorded source files. `model_14000.pt` alone supports policy loading and export, not the complete training setup.
+
+## Train
+
+After restoring the required assets:
 
 ```bash
-python scripts/list_envs.py --keyword AMP
+python scripts/train.py Unitree-G1-AMP-Flat \
+  --gpu-ids 0 \
+  --env.scene.num-envs=512 \
+  --agent.max-iterations=14000 \
+  --agent.seed=2031 \
+  --agent.run-name=wmrl_amp \
+  --agent.save-interval=1000
 ```
 
-Main tasks:
-
-- `Unitree-G1-AMP-Rough`
-- `Unitree-G1-AMP-Flat`
-
-## Training
+Logs are written to `logs/rsl_rl/g1_supermimic_locomotion/<timestamp>_<run_name>/`. View them with:
 
 ```bash
-python scripts/train.py Unitree-G1-AMP-Flat --env.scene.num-envs=4096
+tensorboard --logdir logs/rsl_rl/g1_supermimic_locomotion
 ```
 
-Logs are saved by default to:
+Use `--help` for options. `--agent.*` retains the existing CLI schema; WMRL options use `--supermimic.*`. Unsupported legacy algorithm overrides raise an error. `--backend supermimic` is an alias for the default `wmrl` backend.
 
-- `logs/rsl_rl/g1_amp_locomotion/<time_stamp_run>/`
+| Artifact | Purpose |
+|---|---|
+| `model_<update>.pt` | Networks, normalization and learning state, without replay; usable for playback/export |
+| `actor_final.pt` | Final checkpoint with the same payload structure as the final numbered checkpoint; not actor-only |
+| `last.pt` | Full trainer resume checkpoint, including replay |
 
-## Training Curve Note (Important)
-
-- Around `2w` iterations (about 20k), the policy often suddenly learns fall-recovery behavior.
-- As a result, multiple metrics in `logs` may show abrupt jumps. This is expected and not necessarily a training failure.
-
-![Training log transition example](logs.png)
-
-## Evaluation and Visualization
-
-Replay with a trained checkpoint:
+To resume, retain the original environment/algorithm settings and specify a larger total update count:
 
 ```bash
-python scripts/play.py Unitree-G1-AMP-Rough \
-  --checkpoint-file logs/rsl_rl/g1_amp_locomotion/<run_dir>/model_<iter>.pt
+python scripts/train.py Unitree-G1-AMP-Flat \
+  --env.scene.num-envs=512 --agent.seed=2031 \
+  --agent.max-iterations=20000 \
+  --agent.resume=True \
+  --agent.load-run=YOUR_RUN_DIRECTORY \
+  --agent.load-checkpoint=last.pt
 ```
 
-Note: ONNX export is enabled by default in both training and play workflows.
+Resume restores learning state, replay and RNG, then starts fresh simulator episodes; it is not bitwise simulator continuation.
 
-## Motion Data Preparation
-
-CSV-to-NPZ conversion script:
+## Playback, export and sim2sim
 
 ```bash
-python scripts/csv_to_npz.py --help
+python scripts/play.py Unitree-G1-AMP-Flat \
+  --checkpoint-file logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt \
+  --num-envs 1 --viewer native
 ```
 
-Recommended data layout:
-
-- Raw CSV: `motion_data_csv/amp`
-- Converted NPZ: `src/assets/motions/g1/amp/WalkandRun` and `src/assets/motions/g1/amp/Recovery`
-
-If valid NPZ files exist in these folders, training config loads them automatically.
-
-## Repository Structure
-
-- `src/tasks/amp_loco`: AMP locomotion/recovery task implementation
-- `src/tasks/amp_loco/config/g1`: G1 task registration, env configs, RL configs
-- `src/tasks/amp_loco/mdp`: rewards, observations, events, termination logic
-- `scripts/train.py`: training entry point
-- `scripts/play.py`: playback entry point
-- `scripts/csv_to_npz.py`: motion data conversion tool
-- `mjlab_patch`: required local patch for mjlab
-
-## Highlights
-
-- One policy unifies walk/run and recovery skills
-- AMP + velocity objective jointly optimize style and task performance
-- Delayed reset with recovery sampling explicitly improves recovery ability
-- End-to-end pipeline supports ONNX export for deployment
-
-## Acknowledgements
-
-- Thanks to [unitreerobotics/unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab) for open-sourcing their work and inspiration.
-- Thanks to [Open-X-Humanoid/TienKung-Lab](https://github.com/Open-X-Humanoid/TienKung-Lab); the rsl_rl AMP part in this project references their implementation.
-
-
-### SuperMimic
-
-The training entry point now defaults to WMRL (SuperMimic); the PPO training branch has been removed. `--backend wmrl` is optional, and `--backend supermimic` remains a compatibility alias. WMRL currently supports G1 AMP Flat on one CUDA GPU. Existing PPO checkpoints remain usable for initialization and evaluation. See [training and resume options](supermimic/PERFORMANCE.md).
+Playback only previews the policy. Export the portable ONNX bundle separately:
 
 ```bash
-python scripts/train.py Unitree-G1-AMP-Flat --env.scene.num-envs=4096 --agent.max-iterations=14000
+python scripts/export_sim2sim.py \
+  --checkpoint-file logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt \
+  --output-dir deploy/wmrl
+
+python scripts/sim2sim.py Unitree-G1-AMP-Flat \
+  --policy deploy/wmrl/policy.onnx \
+  --viewer native --duration 60 --command 0.5 0 0
 ```
+
+The bundle contains `policy.onnx`, `policy.json`, and `scene.zip`. Normalization is embedded in ONNX. Export checks numerical agreement on 100 inputs. For headless sim2sim, use `--viewer none`; add `--output /tmp/sim2sim.json` to save rollout measurements.
+
+## Robot deployment
+
+The board entrypoint uses Python ONNX inference and native Unitree SDK2 C++ transport. Build the extension against the board SDK and matching DDS libraries as described in [deploy/README.md](deploy/README.md), then run on the robot computer:
+
+```bash
+python deploy/deploy_g1_cpp.py --net eth0 --policy deploy/wmrl/policy.onnx
+```
+
+Operator sequence: START → nominal pose → A → policy; B/SELECT stops. Runtime CRC, stale-state checks and watchdog damping remain. Standalone deployment verification scripts have been removed. Software tests and sim2sim do not establish real-robot closed-loop performance.
+
+## Code and validation
+
+| Path | Responsibility |
+|---|---|
+| `scripts/train.py`, `supermimic/train_fast.py` | Supported training CLI and WMRL training loop |
+| `supermimic/core/` | Dynamics, replay, imagination, policy loading and checkpoint handling |
+| `supermimic/mdp/`, `supermimic/adapters/` | Rewards, AMP, recovery and simulation adapter |
+| `supermimic/evaluation/` | Fixed-scenario evaluation and shared metrics |
+| `src/tasks/amp_loco/` | G1 task and environment configuration |
+| `deploy/` | ONNX assets and native robot transport |
+
+```bash
+python -m unittest discover -s supermimic/tests -v
+```
+
+The cleanup passed 26 tests, including ONNX parity, plus loading/inference of the published checkpoint. Native C++ rebuild was not verified in the cleanup environment because pybind11 was unavailable. Earlier stage trainers and reports remain for historical experiments; [supermimic/README.md](supermimic/README.md) documents that history, not an additional supported training backend.

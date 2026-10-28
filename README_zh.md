@@ -1,156 +1,153 @@
-wo# AMP_mjlab
+# SuperMimic AMP — 面向 Unitree G1 的 WMRL
 
 [English README](README.md)
 
-部署集成代码位于 [ccrpRepo/wbc_fsm](https://github.com/ccrpRepo/wbc_fsm) 项目中的 `MJAmp State`。
+基于 mjlab 的 G1 世界模型强化学习项目，目标是速度跟踪与跌倒恢复。当前训练后端为 WMRL：真实仿真采集、动力学学习、想象轨迹和通过时间反向传播（BPTT）更新策略；AMP 提供可微的运动风格奖励。
 
-基于 mjlab + rsl_rl 的 G1 AMP 运动控制项目。
+## 当前实现
 
-本项目的核心特点是：
+- 真实 transition 写入序列 replay buffer，用于拟合世界模型。
+- Actor 在想象轨迹上优化任务与 AMP 奖励，结合 critic 自举和冻结 teacher 锚定。
+- 判别器通过真实策略/专家 transition 独立训练，采用最小二乘目标和梯度惩罚；想象阶段冻结其参数，保留输入梯度。
+- 策略接收四帧观测（384 维），输出 29 个关节动作，控制频率为 50 Hz。
+- 当前训练支持 `Unitree-G1-AMP-Flat`、单张 CUDA GPU 和 TensorBoard；默认 FP32、开启编译、想象时域为 8。
 
-- 使用同一个 policy 同时学习 locomotion（走/跑）与 recovery（跌倒恢复）
-- 通过 AMP 判别器约束动作风格与运动先验
-- 在训练与导出链路中保持一致，支持直接导出 ONNX policy
+PPO 优化器和训练 Runner 已移除。保留的 `rsl_rl` 组件用于网络和归一化兼容，`OnPolicyRunner` 仅是满足 mjlab 导入的占位类。当前实现依赖已有策略初始化和 teacher 锚定，不是从零训练。
 
-## 核心思路
+## 环境准备
 
-传统做法常把“走跑策略”和“恢复策略”分开训练并做切换；本项目将两类能力放入一个策略中统一学习。
-
-实现要点：
-
-- 运动数据分组：
-	- Walk/Run 数据目录：`src/assets/motions/g1/amp/WalkandRun`
-	- Recovery 数据目录：`src/assets/motions/g1/amp/Recovery`
-- 延迟重置机制（Delayed Termination）：
-	- 一部分环境在触发终止后不立即 reset，而是给定恢复窗口
-	- 该子集环境优先从 Recovery 片段采样 reset 状态
-- 统一 AMP 训练：
-	- 单一 actor-critic + 单一 AMP discriminator
-	- 在同一训练过程中学习速度跟踪、抗扰动与恢复能力
-
-这样可以减少策略切换带来的状态不连续问题，得到更一致的行为。
-
-## 环境要求
-
-- Linux
-- Python 3.11（建议）
-- 已可用的 MuJoCo / GPU 驱动环境
-
-## 快速开始
-
-### 1. 安装仓库
+使用 Linux、Python 3.11、支持 CUDA 的 PyTorch 和可用的 GPU 驱动。以下命令在仓库根目录、已有的 mjlab 环境中执行。`setup.py` 固定了 mjlab 1.2.0、mujoco-warp 3.8.1、warp-lang 1.12.0 和 SciPy 1.17.0。
 
 ```bash
 conda activate mjlab
-cd AMP_mjlab
 python -m pip install -e .
-cd rsl_rl
-python -m pip install -e .
+python -m pip install onnx onnxruntime tensorboard
+export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 ```
 
-### 2. 应用 mjlab 补丁（可选）
-
-如果不打这个补丁，则需要在代码中去掉 `history_ordering` 配置。
-
-补丁作用说明：
-
-- 增加了历史观测的展开方式选项，可选择按时间维(`time`)或按观测项(`term`)展开。
-- mjlab 默认仅支持按 `term` 展开。
-
-补丁文件：
-
-- `mjlab_patch/mjlab/managers/observation_manager.py`
-
-示例覆盖命令：
+将仓库根目录加入 `PYTHONPATH`，确保使用本地兼容模块。G1 观测配置依赖仓库提供的**按时间排列观测历史补丁**；如果当前 mjlab 尚未包含该补丁，先备份再替换：
 
 ```bash
-cp mjlab_patch/mjlab/managers/observation_manager.py \
-	/home/crp/miniconda3/envs/mjlab/lib/python3.11/site-packages/mjlab/managers/observation_manager.py
+python - <<'PYTHON'
+from pathlib import Path
+import shutil
+import mjlab
+source = Path('mjlab_patch/mjlab/managers/observation_manager.py')
+target = Path(mjlab.__file__).resolve().parent / 'managers/observation_manager.py'
+shutil.copy2(target, target.with_suffix('.py.bak'))
+shutil.copy2(source, target)
+print(target)
+PYTHON
 ```
 
-### 3. 查看可用任务
+不要通过删除 `history_ordering="time"` 绕过补丁：观测顺序必须与 checkpoint 一致。
 
-```bash
-python scripts/list_envs.py --keyword AMP
+运动数据目录：
+
+- `src/assets/motions/g1/amp/WalkandRun/`
+- `src/assets/motions/g1/amp/Recovery/`
+
+## Checkpoint 与训练前提
+
+已提交、可用于播放和导出的模型：
+
+```text
+logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt
 ```
 
-主要任务：
+当前训练器还依赖以下固定路径中的初始化文件：
 
-- `Unitree-G1-AMP-Rough`
-- `Unitree-G1-AMP-Flat`
+- `logs/rsl_rl/g1_amp_locomotion/2026-10-24_13-24-33/model_66600.pt`
+- `logs/supermimic/p3_online_conservative_20261026/actor_final.pt`
+
+第一个提供 teacher 和原始 AMP 状态，第二个提供初始策略及世界模型学习状态。这些历史文件不包含在单个已发布 checkpoint 中，启动新训练前需要恢复。续训也会检查记录的源文件。仅有 `model_14000.pt` 可以加载策略和导出，但不能满足完整训练链路的依赖。
 
 ## 训练
 
+恢复上述依赖后运行：
 
 ```bash
-python scripts/train.py Unitree-G1-AMP-Flat --env.scene.num-envs=4096
+python scripts/train.py Unitree-G1-AMP-Flat \
+  --gpu-ids 0 \
+  --env.scene.num-envs=512 \
+  --agent.max-iterations=14000 \
+  --agent.seed=2031 \
+  --agent.run-name=wmrl_amp \
+  --agent.save-interval=1000
 ```
 
-
-日志默认在：
-
-- `logs/rsl_rl/g1_amp_locomotion/<time_stamp_run>/`
-
-## 训练曲线说明（重要）
-
-- 在约 `2w` 轮（约 20k iterations）附近，策略通常会突然学会“跌倒后恢复”行为。
-- 对应地，`logs` 中多个指标会出现明显突变（阶跃式变化），这是正常现象，不一定是训练异常。
-
-![训练日志突变示例](logs.png)
-
-## 评估与可视化
-
-使用已训练权重回放：
+日志写入 `logs/rsl_rl/g1_supermimic_locomotion/<时间戳>_<run_name>/`。查看 TensorBoard：
 
 ```bash
-python scripts/play.py Unitree-G1-AMP-Rough \
-	--checkpoint-file logs/rsl_rl/g1_amp_locomotion/<run_dir>/model_<iter>.pt 
+tensorboard --logdir logs/rsl_rl/g1_supermimic_locomotion
 ```
 
-说明：训练与回放阶段都支持 ONNX 导出（默认开启）。
+通过 `--help` 查看参数。`--agent.*` 保留现有命令行结构，WMRL 专用选项位于 `--supermimic.*`；不支持的旧算法参数覆盖会报错。`--backend supermimic` 是默认 `wmrl` 后端的兼容别名。
 
-## 运动数据准备
+| 文件 | 用途 |
+|---|---|
+| `model_<update>.pt` | 网络、归一化和学习状态，不含 replay；可用于播放和导出 |
+| `actor_final.pt` | 最终 checkpoint，与最终编号模型采用相同载荷结构，并非仅 actor 权重 |
+| `last.pt` | 包含 replay 的完整训练恢复文件 |
 
-仓库提供 CSV 到 NPZ 的转换脚本：
+续训需保持原运行的环境和算法配置，并将总更新次数设为更大的值：
 
 ```bash
-python scripts/csv_to_npz.py --help
+python scripts/train.py Unitree-G1-AMP-Flat \
+  --env.scene.num-envs=512 --agent.seed=2031 \
+  --agent.max-iterations=20000 \
+  --agent.resume=True \
+  --agent.load-run=YOUR_RUN_DIRECTORY \
+  --agent.load-checkpoint=last.pt
 ```
 
-推荐目录组织：
+续训恢复学习状态、replay 和随机状态，然后重新开始仿真 episode；不是模拟器内部状态的逐位续训。
 
-- 原始 CSV：`motion_data_csv/amp`
-- 转换后 NPZ：`src/assets/motions/g1/amp/WalkandRun` 与 `src/assets/motions/g1/amp/Recovery`
-
-只要上述目录中存在可用 NPZ，训练配置会自动加载。
-
-## 目录说明
-
-- `src/tasks/amp_loco`：AMP locomotion/recovery 任务实现
-- `src/tasks/amp_loco/config/g1`：G1 任务注册、环境与 RL 配置
-- `src/tasks/amp_loco/mdp`：奖励、观测、事件、终止逻辑
-- `scripts/train.py`：训练入口
-- `scripts/play.py`：回放入口
-- `scripts/csv_to_npz.py`：动作数据转换工具
-- `mjlab_patch`：依赖的 mjlab 本地补丁
-
-## 项目亮点总结
-
-- 单一策略统一覆盖走跑与跌倒恢复
-- AMP + 速度任务联合优化，兼顾风格与任务性能
-- 延迟重置与 recovery 采样机制，显式强化恢复能力
-- 训练到部署链路完整，支持 ONNX 导出
-
-## 致谢
-
-- 感谢 [unitreerobotics/unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab) 项目的开源工作与启发。
-- 感谢 [Open-X-Humanoid/TienKung-Lab](https://github.com/Open-X-Humanoid/TienKung-Lab)，本项目在 rsl_rl 的 AMP 部分参考了该实现。
-
-
-### SuperMimic
-
-训练入口现在默认 WMRL（SuperMimic），已移除 PPO 训练分支。可省略 `--backend wmrl`；旧的 `--backend supermimic` 作为兼容别名保留。目前支持 G1 AMP Flat、单 CUDA GPU。已有 PPO 检查点仍可用于初始化和评估。详见[训练及续训说明](supermimic/PERFORMANCE.md)。
+## 播放、导出与 sim2sim
 
 ```bash
-python scripts/train.py Unitree-G1-AMP-Flat --env.scene.num-envs=4096 --agent.max-iterations=14000
+python scripts/play.py Unitree-G1-AMP-Flat \
+  --checkpoint-file logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt \
+  --num-envs 1 --viewer native
 ```
+
+播放入口只负责策略预览。单独导出可移植 ONNX 包：
+
+```bash
+python scripts/export_sim2sim.py \
+  --checkpoint-file logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt \
+  --output-dir deploy/wmrl
+
+python scripts/sim2sim.py Unitree-G1-AMP-Flat \
+  --policy deploy/wmrl/policy.onnx \
+  --viewer native --duration 60 --command 0.5 0 0
+```
+
+导出包包含 `policy.onnx`、`policy.json` 和 `scene.zip`，观测归一化已包含在 ONNX 中。导出时使用 100 组输入检查数值一致性。无界面 sim2sim 使用 `--viewer none`；添加 `--output /tmp/sim2sim.json` 保存轨迹测量摘要。
+
+## 真机部署
+
+板端采用 Python ONNX 推理与 Unitree SDK2 原生 C++ 通信。按照 [deploy/README.md](deploy/README.md)，使用板端 SDK 和匹配的 DDS 库编译扩展，再在机器人计算机上执行：
+
+```bash
+python deploy/deploy_g1_cpp.py --net eth0 --policy deploy/wmrl/policy.onnx
+```
+
+操作顺序：START → 默认姿态 → A → 策略；B/SELECT 停止。运行时 CRC、状态超时和看门狗阻尼保留，独立部署验证脚本已移除。软件测试及 sim2sim 结果不能替代真机闭环性能验证。
+
+## 代码与验证
+
+| 路径 | 职责 |
+|---|---|
+| `scripts/train.py`、`supermimic/train_fast.py` | 当前训练入口与 WMRL 训练循环 |
+| `supermimic/core/` | 动力学、replay、想象、策略加载与 checkpoint |
+| `supermimic/mdp/`、`supermimic/adapters/` | 奖励、AMP、恢复目标及仿真适配 |
+| `supermimic/evaluation/` | 固定场景评估与公共指标 |
+| `src/tasks/amp_loco/` | G1 任务与环境配置 |
+| `deploy/` | ONNX 资源及原生机器人通信 |
+
+```bash
+python -m unittest discover -s supermimic/tests -v
+```
+
+代码清理后 26 项测试通过，包含 ONNX 一致性检查；已发布 checkpoint 的加载与推理正常。清理环境缺少 pybind11，未验证原生 C++ 重新编译。早期阶段训练脚本和报告保留用于历史实验；[supermimic/README.md](supermimic/README.md) 记录这些历史，不代表另一个当前支持的训练后端。
