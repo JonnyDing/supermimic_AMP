@@ -12,7 +12,7 @@ from supermimic.adapters.mjlab import CaptureEnv, PhysicsCollector, read_physics
 from supermimic.mdp.kinematics import RobotKinematics
 from supermimic.mdp.velocity import VelocityHeads
 from supermimic.core.state import pack
-from supermimic.evaluation.ppo import COMMANDS, initialize_scenarios
+from supermimic.evaluation.scenarios import COMMANDS, initialize_scenarios
 
 @torch.no_grad()
 def run_trial(seed, policy, norm, data, frames, device, horizon_seconds=20, full_amp=None, push_step=None):
@@ -140,7 +140,8 @@ def main():
     import argparse
     import json
     from pathlib import Path
-    from supermimic.evaluation.ppo import ROOT, load_policy, fixed_recovery_frames
+    from supermimic.core.policy import ROOT, load_policy
+    from supermimic.evaluation.scenarios import fixed_recovery_frames
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)

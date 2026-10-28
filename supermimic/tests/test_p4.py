@@ -6,7 +6,7 @@ from mjlab.managers.termination_manager import TerminationManager
 from src.tasks.amp_loco.mdp.terminations import DelayedTerminationManager
 from supermimic.mdp.recovery import advance_recovery
 from supermimic.mdp.amp import ExpertPairs
-from supermimic.train_p4 import acceptance
+from supermimic.evaluation.metrics import acceptance
 
 
 class RecoveryTest(unittest.TestCase):

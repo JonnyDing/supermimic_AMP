@@ -1,4 +1,4 @@
-"""RL configuration for Unitree G1 AMP locomotion task."""
+"""Legacy CLI configuration schema for WMRL; no PPO optimizer is constructed."""
 
 import os
 from dataclasses import dataclass, field
@@ -31,7 +31,7 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
   amp_anchor_name: str = ""
 
 
-def g1_amp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
+def g1_wmrl_runner_cfg() -> RslRlAmpRunnerCfg:
   """Create RL runner configuration for Unitree G1 AMP locomotion task."""
   return RslRlAmpRunnerCfg(
     actor=RslRlModelCfg(
@@ -62,7 +62,7 @@ def g1_amp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
       lam=0.95,
       desired_kl=0.01,
       max_grad_norm=1.0,
-      class_name="AMPPPO",
+      class_name="WMRL",
     ),
     experiment_name="g1_amp_locomotion",
     logger="tensorboard",

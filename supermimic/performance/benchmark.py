@@ -9,7 +9,7 @@ from supermimic.core.replay import SequenceReplay
 from supermimic.core.world_model import WorldModel,rollout_loss
 from supermimic.core.imagination import ValueModel,freeze_parameters,update_critic
 from supermimic.core.p4 import sample_starts,imagine
-from supermimic.evaluation.ppo import ROOT,load_policy
+from supermimic.core.policy import ROOT, load_policy
 from supermimic.evaluation.world_model import DYNAMICS_KEYS
 from supermimic.mdp.amp import AMPFeatures,DifferentiableAMP,DiscriminatorUpdates
 from supermimic.mdp.recovery import RecoveryHeads

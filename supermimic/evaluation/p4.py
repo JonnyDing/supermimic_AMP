@@ -2,11 +2,12 @@
 import argparse,json
 from pathlib import Path
 import torch
-from supermimic.evaluation.ppo import ROOT,load_policy,fixed_recovery_frames
+from supermimic.core.policy import ROOT, load_policy
+from supermimic.evaluation.scenarios import fixed_recovery_frames
 from supermimic.evaluation.bptt import run_trial
 from supermimic.evaluation.acceptance import json_safe_metrics
 from supermimic.mdp.amp import DifferentiableAMP
-from supermimic.train_p4 import full_summary,acceptance
+from supermimic.evaluation.metrics import full_summary,acceptance
 
 
 def evaluate_checkpoint(candidate,output,seeds=(82,83,84),seconds=20,device='cuda:0',push=True):

@@ -5,7 +5,7 @@ import torch
 from supermimic.adapters.mjlab import CaptureEnv,read_physics,read_task_metadata,read_contact_labels
 from supermimic.core.state import pack
 from supermimic.core.imagination import freeze_parameters
-from supermimic.evaluation.ppo import ROOT
+from supermimic.core.policy import ROOT
 from supermimic.mdp.amp import AMPFeatures,DifferentiableAMP
 from supermimic.mdp.recovery import RecoveryHeads
 

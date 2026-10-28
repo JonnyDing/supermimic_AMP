@@ -1,3 +1,1 @@
-from .runner import (
-  VelocityOnPolicyRunner as VelocityOnPolicyRunner,
-)
+"""Velocity environments retained for inspection; legacy PPO runner removed."""

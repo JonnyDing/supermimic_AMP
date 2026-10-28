@@ -21,8 +21,8 @@ def body_features(positions, rotations, velocities, angular, bodies, anchor):
 
 class AMPFeatures:
     def __init__(self, env):
-        from src.tasks.amp_loco.config.g1.rl_cfg import g1_amp_ppo_runner_cfg
-        cfg = g1_amp_ppo_runner_cfg()
+        from src.tasks.amp_loco.config.g1.rl_cfg import g1_wmrl_runner_cfg
+        cfg = g1_wmrl_runner_cfg()
         self.kin = RobotKinematics(env)
         self.names = list(env.scene['robot'].body_names)
         self.bodies = [self.names.index(n) for n in cfg.amp_body_names]

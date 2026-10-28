@@ -8,26 +8,14 @@ from pathlib import Path
 import numpy as np
 import torch
 from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
-from rsl_rl.modules.actor_critic import ActorCritic
-from rsl_rl.modules.normalizer import EmpiricalNormalization
 
 from supermimic.adapters.mjlab import CaptureEnv, PhysicsCollector
 from supermimic.evaluation.baseline import sha256
 from supermimic.mdp.kinematics import RobotKinematics
 
-ROOT = Path(__file__).resolve().parents[2]
+from supermimic.core.policy import ROOT, load_policy
 COMMANDS = [[0., 0., 0.], [0.5, 0., 0.], [1.5, 0., 0.], [0., 0.5, 0.], [0., 0., 0.75]]
 
-
-def load_policy(checkpoint, device):
-    saved = torch.load(checkpoint, map_location=device, weights_only=False)
-    policy = ActorCritic(384, 864, 29, actor_hidden_dims=[512, 256, 128],
-                         critic_hidden_dims=[512, 256, 128], activation='elu').to(device)
-    policy.load_state_dict(saved['model_state_dict'], strict=True)
-    norm = EmpiricalNormalization([384]).to(device)
-    norm.load_state_dict(saved['obs_norm_state_dict'], strict=True)
-    policy.eval(); norm.eval()
-    return policy, norm
 
 
 def fixed_recovery_frames():

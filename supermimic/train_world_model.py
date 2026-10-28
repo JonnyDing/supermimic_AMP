@@ -15,7 +15,7 @@ from supermimic.core.replay import SequenceReplay
 from supermimic.core.state import pack
 from supermimic.core.world_model import WorldModel, rollout_loss
 from supermimic.evaluation.world_model import evaluate, DYNAMICS_KEYS
-from supermimic.evaluation.ppo import load_policy, ROOT
+from supermimic.core.policy import load_policy, ROOT
 from supermimic.evaluation.baseline import sha256
 
 

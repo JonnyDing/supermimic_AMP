@@ -50,32 +50,6 @@ This is explicit, not a claim that every reference FSM detail is identical.
 - SIGKILL/power/network loss cannot guarantee damping; independent robot protection
   remains required. No automatic motion-controller release or ownership checking.
 
-## Validation commands
-
-Native loopback only, domain 71 / lo:
-
-```bash
-python deploy/verify_cpp.py --policy deploy/wmrl/policy.onnx --trace deploy/wmrl/trace.npz
-```
-
-Tests: 1000-frame observations/actions/targets, 1 kHz sustained native publishing
-with 50 Hz policy commands, bad CRC rejection, joystick axes/deadzone, Python stall,
-B/SELECT latch, stale state, frozen ticks, damping. Native LowCmd CRCs were additionally
-cross-checked against the independent Python SDK CRC implementation on all 1000 commands.
-
-Read-only real stream, no motor command publisher:
-
-```bash
-python deploy/diagnose_cpp_stream.py --net eth0 --policy deploy/wmrl/policy.onnx
-```
-
-Board results: replay action error <=9.54e-7, target error <=4.65e-7 rad;
-1 kHz loopback control P99 1.53 ms; real stream ~999.9 Hz, snapshot+inference P99
-0.75 ms, largest observed 20 ms loop interval 20.23 ms, native state age P99 1.22 ms.
-Reports: `deploy/reports/cpp_validation_board.json`, `live_cpp_readonly_board.json`.
-These are software/interface and read-only tests. Real-robot ONNX closed-loop behavior
-has not been validated; improving throughput does not prove all physical instability fixed.
-
 ## Build
 
 Built against the existing board SDK headers/static library and matching native DDS
@@ -92,16 +66,14 @@ cmake --build deploy/cpp/build -j2
 Runtime files: deploy_g1_cpp.py, policy_core.py (shared policy logic), cpp_runtime.py,
 wmrl_transport.cpython-38-aarch64-linux-gnu.so, policy.onnx, policy.json. The obsolete pure Python DDS entrypoint has been removed.
 
-## Environment check
+## Directory scope
 
-```bash
-python deploy/check_environment.py --policy deploy/wmrl/policy.onnx
-```
+This directory contains the deployment entrypoint, shared policy logic, native
+runtime loader, C++ transport source/build configuration, and policy assets.
+Standalone environment checks, stream diagnostics, replay verification tools and
+the native test peer have been removed. Rebuild the native extension from the
+current source before deployment.
 
-This imports the compiled native module and checks ONNX inference, but creates no
-DDS participant or publisher. The board's existing robomimic environment is used;
-no old Python-DDS environment YAML or shell launcher is required.
-Only C++ native source and CMake configuration, the ARM64 extension, shared policy
-logic, current entrypoint and relevant verification tools remain in this directory.
-Historical JSON reports are retained as diagnostic evidence; their old script paths
-may refer to removed implementations. The provided RoboMimic reference tree is unchanged.
+Historical JSON reports and the recorded trace remain as archived evidence;
+their script paths refer to removed verification tools. Real-robot ONNX closed-loop
+behavior has not been validated by this cleanup.

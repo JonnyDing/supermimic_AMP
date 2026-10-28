@@ -1,5 +1,15 @@
 # AMP_mjlab / SuperMimic
 
+> 已清理未使用的 RSL-RL 循环网络、蒸馏/RND、旧 replay/rollout storage、日志适配器和 motion loader。
+> 播放入口仅负责策略预览；ONNX 导出使用 `scripts/export_sim2sim.py`。
+> 阶段训练脚本保留为历史实验入口，当前核心不再从这些入口导入公共函数。
+
+> 当前训练后端仅为 WMRL。PPO/AMP-PPO 优化器及训练 Runner 已移除；
+> `core/policy.py` 提供公共 checkpoint 加载，`evaluation/scenarios.py` 保留固定场景基线评估。
+> 原策略仍用于初始化和冻结 teacher。ActorCritic、归一化及 AMP 判别器保持兼容。
+> `rsl_rl.runners.OnPolicyRunner` 仅为 mjlab 自动导入所需的占位类，不能训练。
+> 下文的 PPO 训练入口描述属于历史记录，不代表当前功能。
+
 状态：P0–P4 核心链路已验证，验收目标为媲美 PPO。长训沿用 `python scripts/train.py Unitree-G1-AMP-Flat`；性能结果、14,000 轮命令及续训说明见 [PERFORMANCE.md](PERFORMANCE.md)。下文保留各阶段历史诊断记录。
 
 目标：将 SuperMimic 的真实仿真采集 → 世界模型多步拟合 → 想象 rollout / BPTT → critic 更新迁入本项目，最终保留速度控制、AMP 风格约束与跌倒恢复。Flat 优先，Rough 后续。原 AMP-PPO 作为对照。
@@ -85,7 +95,7 @@ probe 使用 4 个环境、关闭推扰、缩短 timeout，并强制一次跌倒
 本次 3 个种子，共 15 个速度场景与 24 个恢复场景。20 秒速度场景存活率与预设恢复成功率均为 100%，但侧向指令与原地转向跟踪明显不足，详见逐指令误差。恢复帧只来自一个 clip，且关闭噪声/推扰，不作泛化结论。
 
 ```bash
-/home/ubuntu/USE/Miniconda/envs/mjlab/bin/python -m supermimic.evaluation.ppo --output /tmp/ppo_fixed_scenarios.json
+/home/ubuntu/USE/Miniconda/envs/mjlab/bin/python -m supermimic.evaluation.scenarios --output /tmp/ppo_fixed_scenarios.json
 /home/ubuntu/USE/Miniconda/envs/mjlab/bin/python -m supermimic.evaluation.summarize /tmp/ppo_fixed_scenarios.json
 ```
 

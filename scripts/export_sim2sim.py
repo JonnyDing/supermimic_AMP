@@ -13,7 +13,7 @@ import onnx
 import onnxruntime as ort
 from mjlab.entity import Entity
 from src.tasks.amp_loco.config.g1.env_cfgs import g1_amp_flat_env_cfg
-from supermimic.evaluation.ppo import load_policy
+from supermimic.core.policy import load_policy
 
 
 class Policy(torch.nn.Module):

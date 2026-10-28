@@ -1,21 +1,17 @@
-"""Script to play RL agent with RSL-RL."""
+"""Preview WMRL policies or dummy agents in MuJoCo."""
 
 import os
-import inspect
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from typing import Literal
 
 import torch
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
-from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_wandb_checkpoint_path
+from mjlab.rl import RslRlVecEnvWrapper
+from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
@@ -25,115 +21,18 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
   checkpoint_file: str | None = None
-  motion_file: str | None = None
   num_envs: int | None = None
   device: str | None = None
   video: bool = False
   video_length: int = 200
   video_height: int | None = None
   video_width: int | None = None
-  camera: int | str | None = None
   viewer: Literal["auto", "native", "viser"] = "auto"
   no_terminations: bool = False
-  export_onnx: bool = True
-  """Export loaded trained policy to ONNX under current run directory/export."""
-  """Disable all termination conditions (useful for viewing motions with dummy agents)."""
-
-  # Internal flag used by demo script.
-  _demo_mode: tyro.conf.Suppress[bool] = False
+  """Disable all termination conditions when previewing motions."""
 
 
 def run_play(task_id: str, cfg: PlayConfig):
-  def onnx_export_kwargs_single_file() -> dict:
-    """Build kwargs that request single-file ONNX export across torch versions."""
-    try:
-      params = inspect.signature(torch.onnx.export).parameters
-    except (TypeError, ValueError):
-      return {}
-
-    if "external_data" in params:
-      return {"external_data": False}
-    if "use_external_data_format" in params:
-      return {"use_external_data_format": False}
-    return {}
-
-  def inline_external_onnx_data(onnx_path: Path) -> None:
-    """Merge external tensor data back into a single ONNX file if needed."""
-    data_path = Path(str(onnx_path) + ".data")
-    if not data_path.exists():
-      return
-
-    try:
-      import onnx
-
-      model = onnx.load(str(onnx_path), load_external_data=True)
-      onnx.save_model(model, str(onnx_path), save_as_external_data=False)
-      if data_path.exists():
-        data_path.unlink()
-      print(f"[INFO]: Inlined external ONNX data into single file: {onnx_path}")
-    except Exception as exc:
-      print(f"[WARN]: Failed to inline ONNX external data for {onnx_path}: {exc}")
-
-  class _OnnxPolicyWrapper(torch.nn.Module):
-    """Expose act_inference as forward and optionally include obs normalizer."""
-
-    def __init__(self, actor_critic: torch.nn.Module, obs_normalizer: Any = None):
-      super().__init__()
-      self.actor_critic = actor_critic
-      self.obs_normalizer = obs_normalizer
-
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-      if self.obs_normalizer is not None:
-        obs = self.obs_normalizer(obs)
-      return self.actor_critic.act_inference(obs)
-
-  def export_runner_policy_to_onnx(runner: Any, output_path: Path):
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Prefer runner-provided exporters to keep behavior consistent with training.
-    if hasattr(runner, "export_policy_to_onnx"):
-      runner.export_policy_to_onnx(str(output_path.parent), output_path.name)
-      inline_external_onnx_data(output_path)
-      return
-    if hasattr(runner, "_export_policy_to_onnx"):
-      runner._export_policy_to_onnx(str(output_path.parent), output_path.name)
-      inline_external_onnx_data(output_path)
-      return
-
-    # Fallback exporter for runners without explicit ONNX export helper.
-    policy = runner.alg.policy
-    obs_normalizer = None
-    if getattr(runner, "empirical_normalization", False) and hasattr(
-      runner, "obs_normalizer"
-    ):
-      obs_normalizer = runner.obs_normalizer
-      obs_normalizer.to("cpu")
-      obs_normalizer.eval()
-
-    wrapper = _OnnxPolicyWrapper(policy, obs_normalizer)
-    wrapper.to("cpu")
-    wrapper.eval()
-    num_obs = policy.actor[0].in_features
-    dummy_input = torch.zeros(1, num_obs)
-    torch.onnx.export(
-      wrapper,
-      dummy_input,
-      str(output_path),
-      export_params=True,
-      opset_version=18,
-      input_names=["obs"],
-      output_names=["actions"],
-      dynamic_axes={"obs": {0: "batch"}, "actions": {0: "batch"}},
-      **onnx_export_kwargs_single_file(),
-    )
-    inline_external_onnx_data(output_path)
-
-    runner_device = getattr(runner, "device", None)
-    if runner_device is not None:
-      policy.to(runner_device)
-      if obs_normalizer is not None:
-        obs_normalizer.to(runner_device)
-
   configure_torch_backends()
 
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -149,56 +48,14 @@ def run_play(task_id: str, cfg: PlayConfig):
     env_cfg.terminations = {}
     print("[INFO]: Terminations disabled")
 
-  # Check if this is a tracking task by checking for motion command.
-  is_tracking_task = "motion" in env_cfg.commands and isinstance(
-    env_cfg.commands["motion"], MotionCommandCfg
-  )
-
-  if is_tracking_task and cfg._demo_mode:
-    # Demo mode: use uniform sampling to see more diversity with num_envs > 1.
-    motion_cmd = env_cfg.commands["motion"]
-    assert isinstance(motion_cmd, MotionCommandCfg)
-    motion_cmd.sampling_mode = "uniform"
-
-  if is_tracking_task:
-    motion_cmd = env_cfg.commands["motion"]
-    assert isinstance(motion_cmd, MotionCommandCfg)
-
-    # Check for local motion file first (works for both dummy and trained modes).
-    if cfg.motion_file is not None and Path(cfg.motion_file).exists():
-      print(f"[INFO]: Using local motion file: {cfg.motion_file}")
-      motion_cmd.motion_file = cfg.motion_file
-    elif DUMMY_MODE:
-      if not cfg.registry_name:
-        raise ValueError(
-          "Tracking tasks require either:\n"
-          "  --motion-file /path/to/motion.npz (local file)\n"
-          "  --registry-name your-org/motions/motion-name (download from WandB)"
-        )
   log_dir: Path | None = None
   resume_path: Path | None = None
   if TRAINED_MODE:
-    log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
-    if cfg.checkpoint_file is not None:
-      resume_path = Path(cfg.checkpoint_file)
-      if not resume_path.exists():
-        raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
-      print(f"[INFO]: Loading checkpoint: {resume_path.name}")
-    else:
-      if cfg.wandb_run_path is None:
-        raise ValueError(
-          "`wandb_run_path` is required when `checkpoint_file` is not provided."
-        )
-      resume_path, was_cached = get_wandb_checkpoint_path(
-        log_root_path, Path(cfg.wandb_run_path)
-      )
-      # Extract run_id and checkpoint name from path for display.
-      run_id = resume_path.parent.name
-      checkpoint_name = resume_path.name
-      cached_str = "cached" if was_cached else "downloaded"
-      print(
-        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
-      )
+    if cfg.checkpoint_file is None:
+      raise ValueError("Provide --checkpoint-file pointing to a WMRL checkpoint")
+    resume_path = Path(cfg.checkpoint_file)
+    if not resume_path.is_file():
+      raise FileNotFoundError(resume_path)
     log_dir = resume_path.parent
 
   if cfg.num_envs is not None:
@@ -246,40 +103,16 @@ def run_play(task_id: str, cfg: PlayConfig):
 
       policy = PolicyRandom()
   else:
-    checkpoint_metadata = torch.load(resume_path, map_location="cpu", weights_only=False)
-    is_supermimic = "p4_critic" in checkpoint_metadata and "world_model" in checkpoint_metadata
-    del checkpoint_metadata
-    if is_supermimic:
-      from supermimic.evaluation.ppo import load_policy
-      actor_critic, normalizer = load_policy(resume_path, device)
-      torch.set_float32_matmul_precision("highest")
+    from supermimic.core.policy import load_policy
+    actor_critic, normalizer = load_policy(resume_path, device)
+    torch.set_float32_matmul_precision("highest")
 
-      def policy(obs):
-        if hasattr(obs, "keys"):
-          obs = obs["actor" if "actor" in obs.keys() else "policy"]
-        return actor_critic.act_inference(normalizer(obs))
+    def policy(obs):
+      if hasattr(obs, "keys"):
+        obs = obs["actor" if "actor" in obs.keys() else "policy"]
+      return actor_critic.act_inference(normalizer(obs))
 
-      print(f"[INFO]: SuperMimic preview: {resume_path}", flush=True)
-      if cfg.export_onnx:
-        print("[INFO]: SuperMimic preview skips PPO runner ONNX export")
-    else:
-      runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-      runner = runner_cls(env, asdict(agent_cfg), device=device)
-      runner.load(str(resume_path), load_optimizer=False)
-      policy = runner.get_inference_policy(device=device)
-
-      if cfg.export_onnx:
-        safe_task_name = task_id.replace("/", "_").replace(":", "_")
-        checkpoint_stem = resume_path.stem if resume_path is not None else "policy"
-        export_root = log_dir if log_dir is not None else Path("logs")
-        onnx_path = (export_root / "export" / f"{safe_task_name}_{checkpoint_stem}.onnx").resolve()
-        try:
-          export_runner_policy_to_onnx(runner, onnx_path)
-          print(f"[INFO]: Exported ONNX policy to: {onnx_path}")
-        except Exception as exc:
-          print(f"[WARN]: Failed to export ONNX policy: {exc}")
-  if DUMMY_MODE and cfg.export_onnx:
-    print("[WARN]: ONNX export is only available for trained agents.")
+    print(f"[INFO]: WMRL preview: {resume_path}", flush=True)
 
   # Handle "auto" viewer selection.
   if cfg.viewer == "auto":
@@ -313,8 +146,7 @@ def main():
     config=mjlab.TYRO_FLAGS,
   )
 
-  # Parse the rest of the arguments + allow overriding env_cfg and agent_cfg.
-  agent_cfg = load_rl_cfg(chosen_task)
+  # Parse playback options.
 
   args = tyro.cli(
     PlayConfig,
@@ -323,7 +155,7 @@ def main():
     prog=sys.argv[0] + f" {chosen_task}",
     config=mjlab.TYRO_FLAGS,
   )
-  del remaining_args, agent_cfg
+  del remaining_args
 
   run_play(chosen_task, args)
 

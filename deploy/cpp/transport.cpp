@@ -125,36 +125,8 @@ public:
     }
     ~Bridge(){close();}
 };
-// Test peer is hard-locked to a non-robot domain and loopback interface.
-class TestPeer {
-    std::shared_ptr<ChannelPublisher<LowState_>> pub;
-    std::shared_ptr<ChannelSubscriber<LowCmd_>> sub;
-    std::mutex mutex;LowCmd_ command{};uint64_t count=0;bool good=false;
-    LowState_ sample{};uint32_t tick=0;std::atomic<bool> running{false};std::thread thread;
-    LowState_ sample_locked(bool valid) {sample.tick()=++tick;sample.crc()=crc(sample);auto copy=sample;if(!valid)copy.crc()^=1;return copy;}
-public:
-    TestPeer(){init(71,"lo");pub=std::make_shared<ChannelPublisher<LowState_>>("rt/lowstate");pub->InitChannel();
-        sub=std::make_shared<ChannelSubscriber<LowCmd_>>("rt/lowcmd");sub->InitChannel([this](const void* raw){std::lock_guard<std::mutex>g(mutex);command=*static_cast<const LowCmd_*>(raw);good=crc(command)==command.crc();count++;},0);}
-    void state(std::vector<float>q,std::vector<float>dq,std::array<float,4>quat,std::array<float,3>gyro,py::bytes remote,bool valid) {
-        std::string r=remote;if(q.size()!=29||dq.size()!=29||r.size()!=40)throw std::runtime_error("Invalid test state");
-        LowState_ copy{};{std::lock_guard<std::mutex>g(mutex);sample.mode_machine()=5;
-        for(int i=0;i<29;i++){sample.motor_state()[i].q()=q[i];sample.motor_state()[i].dq()=dq[i];}
-        sample.imu_state().quaternion()=quat;sample.imu_state().gyroscope()=gyro;std::memcpy(sample.wireless_remote().data(),r.data(),40);copy=sample_locked(valid);}
-        pub->Write(copy);
-    }
-    void start(){if(running.exchange(true))return;thread=std::thread([this]{auto t=Clock::now();while(running){LowState_ copy{};{std::lock_guard<std::mutex>g(mutex);copy=sample_locked(true);}pub->Write(copy);t+=std::chrono::milliseconds(1);std::this_thread::sleep_until(t);}});}
-    void repeat(){LowState_ copy{};{std::lock_guard<std::mutex>g(mutex);copy=sample;}pub->Write(copy);}
-    void stop(){if(running.exchange(false)&&thread.joinable())thread.join();}
-    py::dict last(){std::lock_guard<std::mutex>g(mutex);py::dict d;d["count"]=count;d["crc_valid"]=good;d["crc"]=command.crc();d["mode_pr"]=command.mode_pr();d["mode_machine"]=command.mode_machine();
-        std::vector<float>q(29),kp(29),kd(29);for(int i=0;i<29;i++){q[i]=command.motor_cmd()[i].q();kp[i]=command.motor_cmd()[i].kp();kd[i]=command.motor_cmd()[i].kd();}d["q"]=q;d["kp"]=kp;d["kd"]=kd;return d;}
-    void close(){stop();if(sub)sub->CloseChannel();if(pub)pub->CloseChannel();sub.reset();pub.reset();}
-    ~TestPeer(){close();}
-};
 PYBIND11_MODULE(wmrl_transport,m){
     py::class_<Bridge>(m,"Bridge").def(py::init<const std::string&,int,bool,const std::vector<float>&>())
       .def("snapshot",&Bridge::snapshot).def("send",&Bridge::send,py::call_guard<py::gil_scoped_release>())
       .def("close",&Bridge::close,py::call_guard<py::gil_scoped_release>());
-    py::class_<TestPeer>(m,"TestPeer").def(py::init<>()).def("state",&TestPeer::state)
-      .def("start",&TestPeer::start).def("stop",&TestPeer::stop,py::call_guard<py::gil_scoped_release>())
-      .def("repeat",&TestPeer::repeat).def("last",&TestPeer::last).def("close",&TestPeer::close,py::call_guard<py::gil_scoped_release>());
 }

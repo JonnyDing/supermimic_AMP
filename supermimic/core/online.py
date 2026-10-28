@@ -3,7 +3,7 @@ import torch
 from .imagination import freeze_parameters, imagine, update_critic
 from .world_model import rollout_loss
 from supermimic.evaluation.world_model import DYNAMICS_KEYS
-from supermimic.train_bptt import eligible_starts, sample_starts
+from .sampling import eligible_starts, sample_starts
 
 
 def snapshot(module): return {k: v.detach().clone() for k, v in module.state_dict().items()}

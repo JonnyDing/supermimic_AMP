@@ -8,7 +8,7 @@ from supermimic.core.replay import SequenceReplay
 from supermimic.core.imagination import ValueModel,freeze_parameters
 from supermimic.core.p4 import sample_starts,imagine
 from supermimic.core.online import snapshot,same_state
-from supermimic.evaluation.ppo import load_policy
+from supermimic.core.policy import load_policy
 from supermimic.mdp.amp import AMPFeatures,DifferentiableAMP
 from supermimic.mdp.recovery import RecoveryHeads
 

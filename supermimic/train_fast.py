@@ -19,7 +19,7 @@ from supermimic.core.checkpoint import atomic_save,rng_state,restore_rng
 from supermimic.mdp.amp import AMPFeatures,DifferentiableAMP,DiscriminatorUpdates
 from supermimic.mdp.recovery import RecoveryHeads
 from supermimic.evaluation.world_model import DYNAMICS_KEYS
-from supermimic.evaluation.ppo import ROOT,load_policy
+from supermimic.core.policy import ROOT, load_policy
 from supermimic.evaluation.baseline import sha256
 from supermimic.core.logging import progress
 

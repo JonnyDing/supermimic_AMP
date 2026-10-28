@@ -1,3 +1,1 @@
-from .runner import (
-  AMPOnPolicyRunner as AMPOnPolicyRunner,
-)
+"""AMP task training is provided by the WMRL backend."""

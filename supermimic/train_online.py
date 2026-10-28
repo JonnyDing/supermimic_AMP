@@ -18,7 +18,8 @@ from supermimic.core.world_model import WorldModel
 from supermimic.evaluation.acceptance import compare, ComparabilityMargins, json_safe_metrics
 from supermimic.evaluation.baseline import sha256
 from supermimic.evaluation.bptt import run_trial, summarize
-from supermimic.evaluation.ppo import ROOT, load_policy, fixed_recovery_frames
+from supermimic.core.policy import ROOT, load_policy
+from supermimic.evaluation.scenarios import fixed_recovery_frames
 from supermimic.evaluation.world_model import evaluate
 from supermimic.mdp.velocity import VelocityHeads
 

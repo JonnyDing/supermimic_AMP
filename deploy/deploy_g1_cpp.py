@@ -78,7 +78,7 @@ def main():
     p.add_argument('--deadzone',type=float,default=.01)
     p.add_argument('--max-tilt-deg',type=float)
     a=p.parse_args()
-    if a.net=='lo':p.error('Use verify_cpp.py for loopback')
+    if a.net=='lo':p.error('Deployment requires a robot network interface')
     if a.max_tilt_deg is not None and not 0<a.max_tilt_deg<=180:p.error('Invalid tilt angle')
     c=Controller(a.policy,net=a.net,velocity_scale=a.velocity_scale,deadzone=a.deadzone,max_tilt_deg=a.max_tilt_deg)
     try:

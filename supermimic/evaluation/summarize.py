@@ -31,7 +31,7 @@ def main():
               f"实测 rollout 总耗时：{summary['evaluation_rollout_wall_seconds']:.2f} 秒，不含环境构建与模型加载；这是评估耗时，不是训练 GPU 时间。", '',
               '范围：关闭观测噪声与推扰，保留启动物理随机化。固定 8 帧来自同一个恢复动作，不代表任意倒地恢复；没有地形、推扰或训练速度对比。', '',
               '复现：', '', '```bash',
-              '/home/ubuntu/USE/Miniconda/envs/mjlab/bin/python -m supermimic.evaluation.ppo --output /tmp/ppo_fixed_scenarios.json',
+              '/home/ubuntu/USE/Miniconda/envs/mjlab/bin/python -m supermimic.evaluation.scenarios --output /tmp/ppo_fixed_scenarios.json',
               '```', '', '完整逐场景指标、动作变化、接触足滑指标见同名 JSON，协议在 `.protocol.json` 中，均保留 checkpoint 和数据哈希。', '']
     args.report.with_suffix('.md').write_text('\n'.join(lines))
 
