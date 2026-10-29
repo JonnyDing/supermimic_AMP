@@ -27,6 +27,12 @@ class Policy(torch.nn.Module):
 
 
 def export(checkpoint, output):
+    saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+    task = saved.get('config', {}).get('task_id', 'Unitree-G1-AMP-Flat')
+    if task != 'Unitree-G1-AMP-Flat':
+        raise ValueError('The portable sim2sim bundle supports AMP Flat only; '
+                         'use scripts/play.py with the checkpoint task for velocity/rough policies')
+    del saved
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(1)

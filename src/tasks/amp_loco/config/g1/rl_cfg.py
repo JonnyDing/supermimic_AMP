@@ -1,14 +1,11 @@
-"""Legacy CLI configuration schema for WMRL; no PPO optimizer is constructed."""
+"""SuperMimic configuration for AMP locomotion."""
 
 import os
 from dataclasses import dataclass, field
 from typing import List
 
-from mjlab.rl import (
-  RslRlModelCfg,
-  RslRlOnPolicyRunnerCfg,
-  RslRlPpoAlgorithmCfg,
-)
+from supermimic.agent_config import SuperMimicRunnerCfg
+
 
 # AMP motion data directory (npz files)
 _MOTION_DATA_DIR = os.path.join(
@@ -19,7 +16,7 @@ _MOTION_DATA_DIR = os.path.join(
 
 
 @dataclass
-class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
+class SuperMimicAmpRunnerCfg(SuperMimicRunnerCfg):
   """Extended runner config with AMP-specific parameters."""
   amp_reward_coef: float = 0.1
   amp_motion_files: str = ""
@@ -31,39 +28,9 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
   amp_anchor_name: str = ""
 
 
-def g1_wmrl_runner_cfg() -> RslRlAmpRunnerCfg:
+def g1_wmrl_runner_cfg() -> SuperMimicAmpRunnerCfg:
   """Create RL runner configuration for Unitree G1 AMP locomotion task."""
-  return RslRlAmpRunnerCfg(
-    actor=RslRlModelCfg(
-      hidden_dims=(512, 256, 128),
-      activation="elu",
-      obs_normalization=True,
-      distribution_cfg={
-        "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar",
-      },
-    ),
-    critic=RslRlModelCfg(
-      hidden_dims=(512, 256, 128),
-      activation="elu",
-      obs_normalization=True,
-    ),
-    algorithm=RslRlPpoAlgorithmCfg(
-      value_loss_coef=1.0,
-      use_clipped_value_loss=True,
-      clip_param=0.2,
-      entropy_coef=0.005,
-      num_learning_epochs=5,
-      num_mini_batches=4,
-      learning_rate=1.0e-3,
-      schedule="adaptive",
-      gamma=0.99,
-      lam=0.95,
-      desired_kl=0.01,
-      max_grad_norm=1.0,
-      class_name="WMRL",
-    ),
+  return SuperMimicAmpRunnerCfg(
     experiment_name="g1_amp_locomotion",
     logger="tensorboard",
     save_interval=100,

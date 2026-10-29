@@ -31,6 +31,10 @@ class OnlineCollection:
                 ids=self.statistics_ids
                 self.world_model.update_stats(pack(transition.state)[ids],pack(transition.next_state)[ids],
                                               transition.action[ids],transition.context[ids])
+            if self.world_model is not None and hasattr(self.world_model, 'update_task_stats'):
+                self.world_model.update_task_stats(transition.next_task['observation_history'][self.statistics_ids],
+                                                   transition.reward[self.statistics_ids],
+                                                   ~(transition.terminated | transition.truncated)[self.statistics_ids])
             version = torch.full_like(transition.episode_id, policy_version)
             transition.task['policy_version'] = version
             transition.next_task['policy_version'] = version.clone()

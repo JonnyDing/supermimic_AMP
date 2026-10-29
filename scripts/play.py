@@ -56,6 +56,11 @@ def run_play(task_id: str, cfg: PlayConfig):
     resume_path = Path(cfg.checkpoint_file)
     if not resume_path.is_file():
       raise FileNotFoundError(resume_path)
+    saved = torch.load(resume_path, map_location="cpu", weights_only=False)
+    saved_task = saved.get("config", {}).get("task_id", "Unitree-G1-AMP-Flat")
+    if saved_task != task_id:
+      raise ValueError(f"Checkpoint belongs to {saved_task}, requested {task_id}")
+    del saved
     log_dir = resume_path.parent
 
   if cfg.num_envs is not None:

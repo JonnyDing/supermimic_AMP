@@ -5,6 +5,10 @@ from typing import Literal
 from mjlab.utils.os import get_checkpoint_path
 
 
+SUPPORTED_TASKS = ('Unitree-G1-AMP-Flat', 'Unitree-G1-AMP-Rough',
+                   'Unitree-G1-Flat', 'Unitree-G1-Rough')
+
+
 @dataclass
 class SuperMimicConfig:
     batch_size: int = 1024
@@ -34,35 +38,37 @@ class SuperMimicConfig:
 
 
 def configure_defaults(task_id,env,agent):
-    if task_id!='Unitree-G1-AMP-Flat':
-        raise ValueError('SuperMimic currently supports Unitree-G1-AMP-Flat only')
-    env.scene.num_envs=4090
+    if task_id not in SUPPORTED_TASKS:
+        raise ValueError(f'SuperMimic supports {SUPPORTED_TASKS}, got {task_id}')
+    env.scene.num_envs=512 if task_id.endswith('Rough') else 4090
     env.events.pop('push_robot',None)
-    env.curriculum={}
+    env.curriculum={k:v for k,v in env.curriculum.items() if k=='terrain_levels'}
     env.episode_length_s=5.
-    agent.experiment_name='g1_supermimic_locomotion'
+    agent.experiment_name={'Unitree-G1-AMP-Flat':'g1_supermimic_locomotion',
+                           'Unitree-G1-AMP-Rough':'g1_supermimic_amp_rough',
+                           'Unitree-G1-Flat':'g1_supermimic_velocity_flat',
+                           'Unitree-G1-Rough':'g1_supermimic_velocity_rough'}[task_id]
     agent.save_interval=1000
     agent.load_checkpoint='last.pt'
     agent.num_steps_per_env=2
     agent.algorithm.learning_rate=2e-4
     agent.algorithm.num_learning_epochs=5
-    agent.algorithm.schedule='fixed'
     agent.upload_model=False
     return env,agent
 
 
 def build_arguments(task_id,cfg,log_dir,device):
-    if task_id!='Unitree-G1-AMP-Flat':raise ValueError('SuperMimic supports Flat only')
+    if task_id not in SUPPORTED_TASKS:raise ValueError(f'Unsupported SuperMimic task: {task_id}')
     if not device.startswith('cuda:'):raise ValueError('SuperMimic currently requires a CUDA GPU')
     if cfg.video:raise ValueError('SuperMimic training video is not supported; use scripts/play.py with model_<iteration>.pt')
-    if cfg.motion_file:raise ValueError('--motion-file is not used by the AMP Flat SuperMimic backend')
+    if cfg.motion_file:raise ValueError('--motion-file is not used by the SuperMimic backend; configure the task motion loader instead')
     if cfg.agent.logger!='tensorboard':raise ValueError('SuperMimic compatibility entry currently supports --agent.logger=tensorboard')
     if tuple(cfg.agent.actor.hidden_dims)!=(512,256,128) or tuple(cfg.agent.critic.hidden_dims)!=(512,256,128):
         raise ValueError('Policy export compatibility requires the existing 512/256/128 policy architecture')
     if cfg.agent.clip_actions is not None:
         raise ValueError('SuperMimic preserves the existing unclipped executed-action contract; clip_actions must be None')
     if cfg.agent.num_steps_per_env<1:raise ValueError('--agent.num-steps-per-env must be positive')
-    # Fail explicitly for changed PPO-only knobs rather than silently ignoring them.
+    # Reject agent fields that this backend does not consume.
     from mjlab.tasks.registry import load_env_cfg,load_rl_cfg
     _,reference=configure_defaults(task_id,load_env_cfg(task_id),load_rl_cfg(task_id))
     actual,expected=asdict(cfg.agent),asdict(reference)
@@ -76,7 +82,9 @@ def build_arguments(task_id,cfg,log_dir,device):
         elif key not in allowed and value!=expected[key]:changed.append(key)
     if changed:raise ValueError('Unsupported SuperMimic agent overrides: '+', '.join(changed))
     agent,sm=cfg.agent,cfg.supermimic
-    args=['--output',str(log_dir),'--updates',str(agent.max_iterations),'--device',device,
+    if sm.evaluate and task_id!='Unitree-G1-AMP-Flat':
+        raise ValueError('Fixed recovery evaluation supports AMP Flat only; use scripts/play.py for other tasks')
+    args=['--task',task_id,'--output',str(log_dir),'--updates',str(agent.max_iterations),'--device',device,
           '--checkpoint-every',str(agent.save_interval),'--logger','tensorboard','--checkpoint-prefix','model',
           '--log-every',str(sm.log_every),
           '--terminal-format',sm.terminal_format,
@@ -100,6 +108,6 @@ def build_arguments(task_id,cfg,log_dir,device):
 def run(task_id,cfg,log_dir,device):
     from supermimic.train_fast import main
     args=build_arguments(task_id,cfg,log_dir,device)
-    print('[INFO] Backend: WMRL / SuperMimic (online WM + AMP + recovery BPTT)',flush=True)
+    print('[INFO] Backend: WMRL / SuperMimic (online world model + imagined BPTT)',flush=True)
     print(f'[INFO] Checkpoints: {log_dir}/model_<iteration>.pt; full resume: last.pt',flush=True)
     main(args,env_cfg=cfg.env,compatibility_config={'task':task_id,'env':asdict(cfg.env),'agent':asdict(cfg.agent)})

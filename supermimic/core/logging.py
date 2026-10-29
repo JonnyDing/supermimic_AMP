@@ -26,7 +26,8 @@ def progress(metrics, total, terminal_format='pretty'):
         f"Speed     {m['updates_per_second']:.2f} updates/s | {m['transitions_per_second']:,.0f} transitions/s"
         f" | total {m['transitions']:,}",
         f"Loss      critic {m['critic_loss']:.5g} (interval peak {m['critic_loss_peak']:.5g})"
-        f" | WM {m['wm_loss']:.5g} | discriminator {m['discriminator_loss']:.5g}",
+        f" | WM {m['wm_loss']:.5g}"
+        + (f" | discriminator {m['discriminator_loss']:.5g}" if 'discriminator_loss' in m else ''),
         f"Actor     imagined return {m['imagined_return']:.5g}"
         f" | grad norm {m['actor_gradient_norm']:.5g} (peak {m['actor_gradient_norm_peak']:.5g})"
         f" | recovery {100*m['recovery_mode_fraction']:.1f}%",

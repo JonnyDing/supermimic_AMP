@@ -31,6 +31,8 @@ DEFAULTS={'num_envs':4090,'batch_size':1024,'wm_batch_size':2048,'buffer_steps':
 
 def arguments(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
+    from supermimic.cli import SUPPORTED_TASKS
+    p.add_argument('--task', choices=SUPPORTED_TASKS, default=None)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--updates',type=int,default=1000)
     p.add_argument('--resume',type=Path);p.add_argument('--device',default='cuda:0')
     p.add_argument('--checkpoint-every',type=int,default=1000);p.add_argument('--log-every',type=int,default=50)
@@ -56,6 +58,10 @@ def arguments(argv=None):
         supplied=getattr(a,key)
         if checkpoint and supplied is not None and supplied!=prior and key not in ('wm_microbatch','actor_microbatch','precision','compile'):p.error(f'Resume config mismatch for {key}: {supplied} != {prior}')
         setattr(a,key,prior if supplied is None else supplied)
+    previous_task=checkpoint['config'].get('task_id','Unitree-G1-AMP-Flat') if checkpoint else 'Unitree-G1-AMP-Flat'
+    if checkpoint and a.task is not None and a.task!=previous_task:p.error('Resume task mismatch')
+    a.task=a.task or previous_task
+    if a.evaluate and a.task!='Unitree-G1-AMP-Flat':p.error('Fixed recovery evaluation supports AMP Flat only')
     if a.test_seeds is None:a.test_seeds=[a.seed]
     if a.precision not in ('fp32','tf32','bf16'):p.error('precision: fp32, tf32 or bf16')
     if a.num_envs<16 or a.batch_size<8 or a.wm_batch_size<1:p.error('Need >=16 envs, >=8 actor batch, positive WM batch')
@@ -73,7 +79,11 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
     os.environ.setdefault('TORCHINDUCTOR_COMPILE_THREADS','4')
     config={k:str(v) if isinstance(v,Path) else v for k,v in vars(a).items()}
     config['resume_semantics']='restore learning state and RNG; start fresh simulator episodes and refill replay'
-    config['task']='WMRL scratch AMP/recovery, startup DR on, random interval pushes off'
+    config['task_id']=a.task
+    learned_task=a.task!='Unitree-G1-AMP-Flat'
+    use_amp='-AMP-' in a.task
+    config['task_model']='learned observation/reward/termination' if learned_task else 'analytic AMP/recovery'
+    config['task']='WMRL scratch; startup DR on, random interval pushes off'
     config['initialization']='scratch; no pretrained policy, world model or teacher'
     config['normalization']='online train-partition actor/WM statistics; independent imagined-input critic statistics; frozen only during BPTT'
     (a.output/'config.json').write_text(json.dumps(config,indent=2))
@@ -88,14 +98,17 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
     torch.manual_seed(a.seed);np.random.seed(a.seed);random.seed(a.seed)
     torch.set_float32_matmul_precision('highest')
     ck=resume
-    policy,norm=load_policy(a.resume,a.device) if resume else create_policy(a.device)
-    amp=DifferentiableAMP(ck,a.device)
-    from src.tasks.amp_loco.config.g1.env_cfgs import g1_amp_flat_env_cfg
+    from supermimic.core.task_model import TaskWorldModel, TaskHeads, TaskImagination
+    amp=DifferentiableAMP(ck,a.device) if use_amp else None
     if env_cfg is None:
-        cfg=g1_amp_flat_env_cfg();cfg.events.pop('push_robot',None);cfg.curriculum={};cfg.episode_length_s=5.
+        import src.tasks
+        from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
+        from supermimic.cli import configure_defaults
+        cfg,_=configure_defaults(a.task,load_env_cfg(a.task),load_rl_cfg(a.task))
     else:cfg=copy.deepcopy(env_cfg)
     cfg.seed=a.seed;cfg.scene.num_envs=a.num_envs
-    env=CaptureEnv(cfg=cfg,device=a.device);start_time=time.perf_counter()
+    env=CaptureEnv(cfg=cfg,device=a.device);env.learned_task=learned_task
+    start_time=time.perf_counter()
     start_update=ck['update'] if resume else 0
     actor_updates=ck.get('actor_updates',ck['update']) if resume else 0
     bootstrap=ck.get('bootstrap',{}) if resume else {}
@@ -104,10 +117,15 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
         if a.logger=='tensorboard':
             from torch.utils.tensorboard import SummaryWriter
             writer=SummaryWriter(log_dir=str(a.output))
-        env.reset(seed=a.seed);heads=RecoveryHeads(env);features=AMPFeatures(env)
-        experts=features.experts(ROOT/'src/assets/motions/g1/amp',a.device,heads.dt)
+        env.reset(seed=a.seed)
+        policy,norm=load_policy(a.resume,a.device) if resume else create_policy(
+            a.device,env.obs_buf['actor'].shape[-1],env.obs_buf['critic'].shape[-1],env.action_manager.action.shape[-1])
+        heads=TaskHeads(env) if learned_task else RecoveryHeads(env)
+        features=AMPFeatures(env) if use_amp else None
+        experts=features.experts(ROOT/'src/assets/motions/g1/amp',a.device,heads.dt) if use_amp else None
+        model_class=TaskWorldModel if learned_task else WorldModel
         if resume:
-            wm=WorldModel(**ck['architecture']).to(a.device);wm.load_state_dict(ck['world_model'])
+            wm=model_class(**ck['architecture']).to(a.device);wm.load_state_dict(ck['world_model'])
             replay=(SequenceReplay.from_state_dict(ck['replay'],a.device) if 'replay' in ck
                     else SequenceReplay(a.buffer_steps,a.num_envs,a.device))
             train_ids,holdout=ck['train_ids'],ck['holdout_ids']
@@ -123,25 +141,36 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
             collector.total_steps=ck['collection_steps']
         else:
             collector.collect(a.warmup_steps,0)
-            wm=WorldModel(replay.storage['action'].shape[-1],replay.storage['context'].shape[-1],
-                          hidden=(a.wm_width,)*3,statistics_mode='running').to(a.device)
+            extra=dict(frame_dim=env.obs_buf['actor'].shape[-1]//cfg.observations['actor'].history_length,
+                       history_length=cfg.observations['actor'].history_length) if learned_task else {}
+            wm=model_class(replay.storage['action'].shape[-1],replay.storage['context'].shape[-1],
+                          hidden=(a.wm_width,)*3,statistics_mode='running',**extra).to(a.device)
             fit_initial_statistics(wm,norm,replay,train_ids)
         collector.world_model=wm
-        critic=ValueModel(wm.input_mean.numel()+11,normalize=True).to(a.device)
-        engine=FastP4(wm,policy.actor,norm,critic,heads,amp,features,compile=a.compile,precision=a.precision,horizon=a.horizon,gamma=a.gamma)
-        discriminator=DiscriminatorUpdates(amp,features,experts,lr=a.discriminator_lr)
+        critic=ValueModel(wm.input_mean.numel()+(0 if learned_task else 11),normalize=True).to(a.device)
+        engine_class=TaskImagination if learned_task else FastP4
+        engine=engine_class(wm,policy.actor,norm,critic,heads,amp,features,compile=a.compile,precision=a.precision,horizon=a.horizon,gamma=a.gamma)
+        if learned_task:
+            names=env.observation_manager._group_obs_term_names['actor']
+            sizes=env.observation_manager._group_obs_term_dim['actor']
+            phase_cfg=cfg.observations['actor'].terms.get('phase')
+            engine.phase_period=phase_cfg.params['period'] if phase_cfg is not None else None
+            engine.action_start=sum(int(np.prod(d)) for d in sizes[:names.index('actions')])//cfg.observations['actor'].history_length
+        discriminator=DiscriminatorUpdates(amp,features,experts,lr=a.discriminator_lr) if use_amp else None
         opt_wm=torch.optim.Adam(wm.parameters(),lr=2e-4)
         opt_actor=torch.optim.Adam(policy.actor.parameters(),lr=a.actor_lr,betas=(.9,.95))
         opt_v=torch.optim.Adam(critic.parameters(),lr=2e-4)
         if resume:
             critic.load_state_dict(ck['p4_critic'])
             opt_wm.load_state_dict(ck['wm_optimizer']);opt_actor.load_state_dict(ck['actor_optimizer'])
-            opt_v.load_state_dict(ck['critic_optimizer']);discriminator.optimizer.load_state_dict(ck['discriminator_optimizer'])
-            experts.cursor=ck['expert_cursor'];discriminator.updates=ck['discriminator_updates']
+            opt_v.load_state_dict(ck['critic_optimizer'])
+            if use_amp:
+                discriminator.optimizer.load_state_dict(ck['discriminator_optimizer'])
+                experts.cursor=ck['expert_cursor'];discriminator.updates=ck['discriminator_updates']
             restore_rng(ck['rng'])
             collector.collect(max(a.resume_refill_steps,a.horizon,a.warmup_steps if 'replay' not in ck else 0),start_update)
         else:
-            print('[SuperMimic] Scratch initialization: random networks, no teacher; pretraining WM and AMP',flush=True)
+            print('[SuperMimic] Scratch initialization: random networks, no teacher; pretraining world model'+(' and AMP' if use_amp else ''),flush=True)
             bootstrap=pretrain(wm,opt_wm,discriminator,collector,train_ids,holdout,
                                a.wm_pretrain_updates,a.wm_batch_size,a.log_every,writer,a.wm_batches,a.wm_microbatch,a.utd,
                                loss_fn=engine.wm_loss,precision=a.precision)
@@ -161,11 +190,12 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
             payload={'fast_schema':3,'schema_version':2,'initialization':'scratch','bootstrap':bootstrap,'config':config,'update':step,'actor_updates':actor_updates,
                      'model_state_dict':policy.state_dict(),'obs_norm_state_dict':norm.state_dict(),
                      'world_model':wm.state_dict(),'architecture':wm.architecture(),'p4_critic':critic.state_dict(),
-                     'amp_normalization':amp.normalization_mode,'discriminator_updates':discriminator.updates,
-                     'discriminator_state_dict':amp.discriminator.state_dict(),'amp_normalizer':amp.normalizer.native(),
+                     'amp_normalization':amp.normalization_mode if use_amp else None,'discriminator_updates':discriminator.updates if use_amp else 0,
+                     'discriminator_state_dict':amp.discriminator.state_dict() if use_amp else None,
+                     'amp_normalizer':amp.normalizer.native() if use_amp else None,
                      'wm_optimizer':opt_wm.state_dict(),'actor_optimizer':opt_actor.state_dict(),
-                     'critic_optimizer':opt_v.state_dict(),'discriminator_optimizer':discriminator.optimizer.state_dict(),
-                     'expert_cursor':experts.cursor,'rng':rng_state(),'train_ids':train_ids,'holdout_ids':holdout,
+                     'critic_optimizer':opt_v.state_dict(),'discriminator_optimizer':discriminator.optimizer.state_dict() if use_amp else None,
+                     'expert_cursor':experts.cursor if use_amp else 0,'rng':rng_state(),'train_ids':train_ids,'holdout_ids':holdout,
                      'collection_steps':collector.total_steps,'collection_accumulator':accumulator,
                      'training_wall_seconds':prior_wall+time.perf_counter()-start_time,
                      'compatibility_env_signature':env_signature,
@@ -194,13 +224,13 @@ def main(argv=None,env_cfg=None,compatibility_config=None):
             torch.set_float32_matmul_precision('high' if a.precision in ('tf32','bf16') else 'highest')
             losses=[]
             for _ in range(a.wm_batches):
-                window=replay.sample_prefix(a.wm_batch_size,8,train_ids,DYNAMICS_KEYS)
+                window=replay.sample_prefix(a.wm_batch_size,8,train_ids,getattr(wm,'replay_keys',DYNAMICS_KEYS))
                 loss=world_model_update(wm,opt_wm,window,engine.wm_loss,a.wm_microbatch)
                 losses.append(loss)
-            metrics=discriminator.update(replay,train_ids,a.batch_size,return_tensors=True)
+            metrics=discriminator.update(replay,train_ids,a.batch_size,return_tensors=True) if use_amp else {}
             opt_wm.zero_grad(set_to_none=True);opt_v.zero_grad(set_to_none=True)
             starts=sample_starts(replay,train_ids,heads,a.batch_size,a.horizon)
-            with freeze_parameters(wm,critic,amp.discriminator):
+            with freeze_parameters(wm,critic,*([amp.discriminator] if use_amp else [])):
                 opt_actor.zero_grad(set_to_none=True)
                 rollout=accumulate_imagination(engine,starts,policy.actor,a.actor_microbatch)
                 grad=torch.nn.utils.clip_grad_norm_(policy.actor.parameters(),1.)
