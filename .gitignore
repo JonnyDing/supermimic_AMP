@@ -32,6 +32,7 @@ htmlcov/
 Thumbs.db
 
 # Project local outputs and datasets
+video/*.mp4
 logs/
 motion_data_npz/
 motion_data_csv/lafan1

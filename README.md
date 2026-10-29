@@ -218,7 +218,11 @@ The bundle contains `policy.onnx`, `policy.json` and `scene.zip`. Normalization 
 
 ## Robot deployment
 
-Deployment test (looping animated preview):
+MuJoCo simulation (looping animated preview):
+
+![MuJoCo simulation preview](video/mujoco.gif)
+
+Real-robot deployment test (looping animated preview):
 
 ![Deployment test video preview](video/example.gif)
 

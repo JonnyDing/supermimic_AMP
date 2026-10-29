@@ -218,7 +218,11 @@ python scripts/sim2sim.py Unitree-G1-AMP-Flat \
 
 ## 机器人部署
 
-部署测试（循环动图预览）：
+MuJoCo 仿真测试（循环动图预览）：
+
+![MuJoCo 仿真视频预览](video/mujoco.gif)
+
+真机部署测试（循环动图预览）：
 
 ![部署测试视频预览](video/example.gif)
 
