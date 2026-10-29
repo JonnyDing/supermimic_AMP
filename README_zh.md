@@ -222,6 +222,8 @@ python scripts/sim2sim.py Unitree-G1-AMP-Flat \
 
 [![部署测试视频预览](video/example.gif)](video/example.mp4)
 
+> **视频说明：目前无法保证每次跌倒恢复后的状态，实机测试存在一定安全风险。**
+
 AMP Flat 导出的部署包通过 Python ONNX 推理和原生 Unitree SDK2 C++ 通信运行。在机器人计算机上按 [deploy/README.md](deploy/README.md) 编译 SDK/DDS 扩展后执行：
 
 ```bash

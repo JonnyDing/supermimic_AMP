@@ -222,6 +222,8 @@ Deployment test (click the animated preview to open the original MP4):
 
 [![Deployment test video preview](video/example.gif)](video/example.mp4)
 
+> **Video note: The resulting state after each fall recovery is not currently guaranteed; testing on a real robot carries safety risks.**
+
 The AMP Flat deployment bundle uses Python ONNX inference and native Unitree SDK2 C++ transport. On the robot computer, build the SDK/DDS extension as described in [deploy/README.md](deploy/README.md), then run:
 
 ```bash
