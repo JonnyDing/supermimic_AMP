@@ -218,9 +218,9 @@ The bundle contains `policy.onnx`, `policy.json` and `scene.zip`. Normalization 
 
 ## Robot deployment
 
-Deployment test (click the animated preview to open the original MP4):
+Deployment test (looping animated preview):
 
-[![Deployment test video preview](video/example.gif)](video/example.mp4)
+![Deployment test video preview](video/example.gif)
 
 > **Video note: The resulting state after each fall recovery is not currently guaranteed; testing on a real robot carries safety risks.**
 

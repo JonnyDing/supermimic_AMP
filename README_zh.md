@@ -218,9 +218,9 @@ python scripts/sim2sim.py Unitree-G1-AMP-Flat \
 
 ## 机器人部署
 
-部署测试视频（下方为循环动图预览，点击打开原始 MP4）：
+部署测试（循环动图预览）：
 
-[![部署测试视频预览](video/example.gif)](video/example.mp4)
+![部署测试视频预览](video/example.gif)
 
 > **视频说明：目前无法保证每次跌倒恢复后的状态，实机测试存在一定安全风险。**
 
