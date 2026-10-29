@@ -12,8 +12,8 @@ def duration(seconds):
 def progress(metrics, total, terminal_format='pretty'):
     hidden = {'critic_target_abs_max', 'critic_value_abs_max', 'critic_target_std',
               'critic_input_abs_max', 'imagined_reward_abs_max',
-              'critic_mse_before', 'critic_alive_weighted_mse', 'imagined_rejected_fraction'}
-    terminal_metrics = {k:v for k,v in metrics.items() if k not in hidden and not k.startswith('guard_')}
+              'critic_mse_before', 'critic_alive_weighted_mse'}
+    terminal_metrics = {k:v for k,v in metrics.items() if k not in hidden}
     if terminal_format == 'json':
         print(json.dumps(terminal_metrics, allow_nan=False), flush=True)
         return

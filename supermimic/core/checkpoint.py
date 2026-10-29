@@ -1,5 +1,5 @@
 """Atomic full-state checkpoints; resume starts a new simulator episode boundary."""
-import os,random
+import hashlib,os,random
 from pathlib import Path
 import numpy as np
 import torch
@@ -23,3 +23,7 @@ def atomic_save(value,path):
         os.replace(temporary,path)
     finally:
         if temporary.exists():temporary.unlink()
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()

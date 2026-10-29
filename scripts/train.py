@@ -27,7 +27,6 @@ class TrainConfig:
   video: bool = False
   video_length: int = 200
   video_interval: int = 2000
-  enable_nan_guard: bool = False
   torchrunx_log_dir: str | None = None
   gpu_ids: list[int] | Literal["all"] | None = field(default_factory=lambda: [0])
 

@@ -92,6 +92,38 @@ class SequenceReplay:
         out['_env_ids'], out['_start_ages'] = envs.clone(), ages.clone()
         return out
 
+    def sample_prefix(self, batch_size, horizon, env_ids, keys=None, generator=None):
+        """Keep terminal prefixes, masking everything after a reset or invalid step.
+
+        Unlike strict contiguous samples this retains states just before failure,
+        including short episodes that cannot supply a full surviving window.
+        """
+        if horizon < 1 or horizon > self.size:
+            raise ValueError('Not enough replay steps for horizon')
+        ages, envs = self.valid_starts(1, env_ids)
+        available = ages <= self.size - horizon
+        ages, envs = ages[available], envs[available]
+        if not len(ages):
+            raise ValueError('No valid prefix starts')
+        picks = torch.randint(len(ages), (batch_size,), device=self.device, generator=generator)
+        ages, envs = ages[picks], envs[picks]
+        out = self.gather(ages, envs, horizon, keys)
+        rows = self.rows(ages[:, None] + torch.arange(horizon, device=self.device))
+        valid = self.storage['dynamics_valid'][rows, envs[:, None]]
+        episodes = self.storage['episode_id'][rows, envs[:, None]]
+        done = (self.storage['terminated'][rows, envs[:, None]] |
+                self.storage['truncated'][rows, envs[:, None]])
+        preceding = torch.cat((torch.ones_like(done[:, :1]), ~done[:, :-1]), 1)
+        mask = (valid & preceding & (episodes == episodes[:, :1])).long().cumprod(1).bool()
+        out['_mask'] = mask
+        # Masked fields can contain invalid physics values. Sanitize before model
+        # evaluation: multiplying a NaN loss by zero would still yield a NaN.
+        for key in tuple(out):
+            if key.startswith('_'): continue
+            shape = (*mask.shape, *((1,) * (out[key].ndim - 2)))
+            out[key] = torch.where(mask.reshape(shape), out[key], out[key][:, :1])
+        return out
+
     def state_dict(self):
         return dict(capacity=self.capacity, num_envs=self.num_envs, ptr=self.ptr, size=self.size,
                     total_steps=self.total_steps, storage=self.storage)

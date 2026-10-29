@@ -31,3 +31,33 @@ class TensorAMPNormalizer(nn.Module):
         result.mean=self.mean64.detach().cpu().numpy().copy();result.var=self.var64.detach().cpu().numpy().copy()
         result.count=float(self.count64)
         return result
+
+
+class RunningNorm(nn.Module):
+    """Reference running moments; callers explicitly update outside BPTT."""
+    def __init__(self, dim, eps=.01, max_count=2e8):
+        super().__init__()
+        self.eps, self.max_count = eps, max_count
+        self.register_buffer('mean', torch.zeros(dim))
+        self.register_buffer('var', torch.ones(dim))
+        self.register_buffer('count', torch.zeros((), dtype=torch.float64))
+        self._host_count = 0
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+        self._host_count = float(self.count)
+
+    @torch.no_grad()
+    def update(self, x):
+        if self._host_count >= self.max_count or not x.numel(): return
+        x = x.reshape(-1, self.mean.numel()).float()
+        n = len(x); total = self._host_count + n
+        mean, var = x.mean(0), x.var(0, unbiased=False)
+        delta = mean-self.mean
+        self.var.copy_((self.var*self._host_count+var*n+delta.square()*self._host_count*n/total)/total)
+        self.mean.add_(delta*n/total)
+        self.count.fill_(total); self._host_count=total
+
+    def std(self): return (self.var+self.eps**2).sqrt()
+
+    def forward(self, x): return (x-self.mean)/self.std()

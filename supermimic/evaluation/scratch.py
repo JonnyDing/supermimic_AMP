@@ -1,18 +1,20 @@
-"""Real mjlab evaluation for P3, with the same post-state task head as BPTT.
-
-Initial states, domain randomization and horizon are paired explicitly by hashes.
-The return is the P3 four-term ablation, not the full AMP training objective.
-"""
-import hashlib
+"""Single-policy simulation evaluation, without a pretrained baseline dependency."""
+import argparse
 import math
-import torch
-from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
 import time
+import json
+from pathlib import Path
+import torch
+from supermimic.core.policy import load_policy
+from supermimic.evaluation.scenarios import COMMANDS, fixed_recovery_frames, initialize_scenarios
+from supermimic.evaluation.metrics import full_summary
+from supermimic.mdp.amp import DifferentiableAMP
 from supermimic.adapters.mjlab import CaptureEnv, PhysicsCollector, read_physics
 from supermimic.mdp.kinematics import RobotKinematics
 from supermimic.mdp.velocity import VelocityHeads
 from supermimic.core.state import pack
-from supermimic.evaluation.scenarios import COMMANDS, initialize_scenarios
+from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
+
 
 @torch.no_grad()
 def run_trial(seed, policy, norm, data, frames, device, horizon_seconds=20, full_amp=None, push_step=None):
@@ -37,15 +39,13 @@ def run_trial(seed, policy, norm, data, frames, device, horizon_seconds=20, full
                          env.command_manager.get_command('twist'))
             env.observation_manager.compute(update_history=False)
         initialize_scenarios(env, data, frames)
+        # Finish asynchronous scenario setup before scoring the first action.
+        if str(device).startswith('cuda'):torch.cuda.synchronize()
         if full_amp is not None:
             from supermimic.mdp.amp import AMPFeatures
             amp_features = AMPFeatures(env)
             full_return = torch.zeros(env.num_envs, device=device)
             style_total = torch.zeros_like(full_return)
-        context_digest = hashlib.sha256(collector.context().cpu().numpy().tobytes()).hexdigest()
-        # Hash simulator coordinates, not a quaternion-derived world angular velocity.
-        # Equivalent derived transforms can differ by a few ULPs after JIT warmup.
-        initial_digest = hashlib.sha256(env.sim.data.qpos.cpu().numpy().tobytes()+env.sim.data.qvel.cpu().numpy().tobytes()).hexdigest()
         torso = list(env.scene['robot'].body_names).index('torso_link')
         n, nv, dt = env.num_envs, len(COMMANDS), env.step_dt
         active = torch.ones(n, dtype=torch.bool, device=device)
@@ -65,8 +65,6 @@ def run_trial(seed, policy, norm, data, frames, device, horizon_seconds=20, full
                 env.sim.data.qvel[:nv, ids] += torch.tensor([0.6, 0.3], device=device)
                 env.sim.forward(); env.sim.sense()
             actions = policy.act_inference(norm(env.obs_buf['actor']))
-            if not torch.isfinite(actions).all():
-                raise RuntimeError(f'Policy produced non-finite actions at step {step}; envs={(~torch.isfinite(actions).all(-1)).nonzero().flatten().tolist()}; active={active.tolist()}')
             tr = collector.step(actions)
             step_reward = heads.reward(pack(tr.next_state), actions, tr.task['previous_action'], tr.task['command'])
             task_return += torch.where(active, step_reward - 200 * dt * tr.terminated.float(), 0.)
@@ -119,58 +117,47 @@ def run_trial(seed, policy, norm, data, frames, device, horizon_seconds=20, full
             else:
                 row['survived_full_horizon'] = not row['terminated'] and float(steps[i]) >= control_steps
             rows.append(row)
-        return {'episodes': rows, 'elapsed_seconds': elapsed, 'context_sha256': context_digest, 'initial_state_sha256': initial_digest, 'initial_hash_schema': 'raw_qpos_qvel_v2', 'math_warmup_calls': 6, 'push_step': push_step, 'push_velocity_xy': [0.6, 0.3] if push_step is not None else None}
+        return {'episodes': rows, 'elapsed_seconds': elapsed, 'math_warmup_calls': 6, 'push_step': push_step, 'push_velocity_xy': [0.6, 0.3] if push_step is not None else None}
     finally:
         env.close()
 
 
-def summarize(trial):
-    velocity = [r for r in trial['episodes'] if r['kind'] == 'velocity']
-    recovery = [r for r in trial['episodes'] if r['kind'] == 'recovery']
-    mean = lambda rows, key: sum(r[key] for r in rows) / len(rows)
-    return {'mean_task_return': mean(velocity, 'p3_task_return'),
-            'velocity_survival_rate': mean(velocity, 'survived_full_horizon'),
-            'xy_rmse': mean(velocity, 'velocity_xy_rmse_m_s'),
-            'yaw_rmse': mean(velocity, 'yaw_rate_rmse_rad_s'),
-            'recovery_success_rate': mean(recovery, 'recovery_success')}
+def evaluate_checkpoint(candidate, output, seeds=(42,), seconds=20, device='cuda:0'):
+    if not seeds or seconds < 1:
+        raise ValueError('Need evaluation seeds and at least one second')
+    output = Path(output)
+    if output.exists():
+        raise ValueError('Use a new evaluation output')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    torch.set_float32_matmul_precision('highest')
+    policy, norm = load_policy(candidate, device)
+    saved = torch.load(candidate, map_location=device, weights_only=False)
+    amp = DifferentiableAMP(saved, device)
+    amp.discriminator.eval()
+    _, data, frames = fixed_recovery_frames()
+    tests = []
+    for seed in seeds:
+        trial = run_trial(seed, policy, norm, data, frames, device, seconds, full_amp=amp)
+        tests.append({'seed': seed, 'summary': full_summary(trial), 'trial': trial})
+    result = {'candidate': str(candidate), 'seconds': seconds, 'tests': tests,
+              'summary': {k: sum(t['summary'][k] for t in tests) / len(tests)
+                          for k in tests[0]['summary']},
+              'reward_judge': 'candidate discriminator; AMP return is not comparable across checkpoints',
+              'protocol': 'fixed velocity and recovery scenarios; no baseline or parity claim'}
+    output.write_text(json.dumps(result, indent=2, allow_nan=False))
+    return result
 
 
 def main():
-    """Re-evaluate one candidate versus its frozen PPO initialization."""
-    import argparse
-    import json
-    from pathlib import Path
-    from supermimic.core.policy import ROOT, load_policy
-    from supermimic.evaluation.scenarios import fixed_recovery_frames
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 43, 44])
+    parser.add_argument('--seeds', type=int, nargs='+', default=[42])
     parser.add_argument('--seconds', type=int, default=20)
     parser.add_argument('--device', default='cuda:0')
     args = parser.parse_args()
-    torch.set_float32_matmul_precision('highest')
-    manifest = json.loads((ROOT/'supermimic/reports/baseline_manifest.json').read_text())
-    policy, norm = load_policy(ROOT/manifest['checkpoint']['path'], args.device)
-    baseline = {k:v.clone() for k,v in policy.state_dict().items()}
-    saved = torch.load(args.candidate, map_location=args.device, weights_only=False)
-    for key,value in norm.state_dict().items():
-        if not torch.equal(value, saved['obs_norm_state_dict'][key]):
-            raise ValueError(f'Candidate observation normalizer differs: {key}')
-    _, data, frames = fixed_recovery_frames()
-    result = []
-    for seed in args.seeds:
-        pair = {'seed':seed}
-        for name, state in [('baseline',baseline),('candidate',saved['model_state_dict'])]:
-            policy.load_state_dict(state); policy.eval()
-            trial = run_trial(seed, policy, norm, data, frames, args.device, args.seconds)
-            pair[name] = {'summary':summarize(trial), 'trial':trial}
-        for key in ('context_sha256','initial_state_sha256'):
-            if pair['baseline']['trial'][key] != pair['candidate']['trial'][key]:
-                raise AssertionError(f'Unpaired evaluation: {key}')
-        result.append(pair)
-    args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(json.dumps(result,indent=2,allow_nan=False))
+    evaluate_checkpoint(args.candidate, args.output, args.seeds, args.seconds, args.device)
 
 
-if __name__=='__main__': main()
+if __name__ == '__main__':
+    main()

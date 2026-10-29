@@ -1,6 +1,0 @@
-{
-  "status": "passed",
-  "four_term_reward_max_abs_error": 7.450580596923828e-09,
-  "comparison_time": "matched post-forward; not stale native reward buffer",
-  "states": 20
-}

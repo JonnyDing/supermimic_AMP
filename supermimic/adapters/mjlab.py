@@ -47,14 +47,14 @@ def read_task_metadata(env):
     command = env.command_manager.get_term("twist")
     tm = env.termination_manager
     return {
-        "observation_history": env.obs_buf["actor"].reshape(env.num_envs, 4, -1).clone(),
+        "observation_history": env.obs_buf["actor"].reshape(env.num_envs, env.cfg.observations["actor"].history_length, -1).clone(),
         "command": command.command.clone(),
         "heading_target": command.heading_target.clone(),
         "command_time_left": command.time_left.clone(),
         "is_heading_env": command.is_heading_env.clone(),
         "is_standing_env": command.is_standing_env.clone(),
-        "recovery_enabled": tm._delay_env_mask.clone(),
-        "recovery_counter": tm._delay_counters.clone(),
+        "recovery_enabled": getattr(tm, "_delay_env_mask", torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)).clone(),
+        "recovery_counter": getattr(tm, "_delay_counters", torch.zeros(env.num_envs, device=env.device, dtype=torch.long)).clone(),
         "episode_step": env.episode_length_buf.clone(),
         "previous_action": env.action_manager.action.clone(),
     }
@@ -69,7 +69,10 @@ class CaptureEnv(ManagerBasedRlEnv):
         if self._collecting:
             ids = env_ids.clone()
             state, task = read_physics(self), read_task_metadata(self)
-            task['observation_history'] = terminal_actor_history(self, state)
+            if not getattr(self, 'learned_task', False):
+                task['observation_history'] = terminal_actor_history(self, state)
+            # Learned-task observation loss masks terminal rows: reset observations
+            # and stale terminal ray casts must never become prediction targets.
             self.terminal_snapshot = (ids, state, task)
         super()._reset_idx(env_ids)
 
@@ -129,14 +132,17 @@ class PhysicsCollector:
         env = self.env
         def expand(x):
             return x.expand(env.num_envs, *x.shape[1:]).reshape(env.num_envs, -1)
-        return torch.cat((expand(env.sim.model.geom_friction),
+        context = torch.cat((expand(env.sim.model.geom_friction),
                           expand(env.sim.model.body_ipos[:, self.torso_id]),
                           expand(env.scene["robot"].data.encoder_bias)), -1).clone()
+        if getattr(env, "learned_task", False):
+            from supermimic.core.task_model import task_context
+            task = read_task_metadata(env)
+            context = task_context(context, task["observation_history"], task, env.max_episode_length)
+        return context
 
     @torch.no_grad()
     def step(self, action):
-        if not torch.isfinite(action).all():
-            raise ValueError("Action contains non-finite values")
         state = read_physics(self.env)
         task = read_task_metadata(self.env)
         context = self.context()

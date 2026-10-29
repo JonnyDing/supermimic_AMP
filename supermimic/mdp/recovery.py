@@ -61,33 +61,28 @@ class RecoveryHeads(VelocityHeads):
         return next_task, delayed, terminated, truncated, continuation
 
     def reward_terms(self,state,next_state,action,previous,command,delayed,termination,contact_logits,
-                     joint_acceleration=None,feet_contact=None,self_collision=None,kinematics=None):
-        """Overrides permit exact native same-instant parity; imagination uses explicit proxies."""
+                     kinematics):
         s=unpack(next_state); old=unpack(state)
-        positions,rotations,velocities,angular=self.kin(s) if kinematics is None else kinematics
-        tracking=super().reward(next_state,action,previous,command)/self.dt if kinematics is None else None
+        _,rotations,velocities,angular=kinematics
         smooth=(action-previous).square().sum(-1)
         limits=((self.limits[:,0]-s.joint_pos).clamp_min(0)+(s.joint_pos-self.limits[:,1]).clamp_min(0)).sum(-1)
-        if tracking is None:
-            local=quat_apply_inverse(yaw_quat(rotations[:,self.torso]),velocities[:,self.torso])
-            target=torch.cat((command[:,:2],torch.zeros_like(command[:,:1])),-1)
-            linear=torch.exp(-(local-target).square().sum(-1))
-            body_w=quat_apply_inverse(rotations[:,self.torso],angular[:,self.torso])
-            angular_error=(angular[:,self.torso,2]-command[:,2]).square()+body_w[:,:2].square().sum(-1)
-            tracking=linear+torch.exp(-angular_error/3.14**2)
-        else:
-            tracking=tracking+.01*smooth+10*limits
+        local=quat_apply_inverse(yaw_quat(rotations[:,self.torso]),velocities[:,self.torso])
+        target=torch.cat((command[:,:2],torch.zeros_like(command[:,:1])),-1)
+        linear=torch.exp(-(local-target).square().sum(-1))
+        body_w=quat_apply_inverse(rotations[:,self.torso],angular[:,self.torso])
+        angular_error=(angular[:,self.torso,2]-command[:,2]).square()+body_w[:,:2].square().sum(-1)
+        tracking=linear+torch.exp(-angular_error/3.14**2)
         root_w=quat_apply_inverse(s.root_quat_wxyz,s.root_ang_vel_w)
         root_rotation=torch.exp(-root_w[:,:2].square().sum(-1)/3.14**2)
         height=torch.exp(-(s.root_pos[:,2]-self.height).square()/.3**2)
-        acc=(s.joint_vel-old.joint_vel)/self.dt if joint_acceleration is None else joint_acceleration
+        acc=(s.joint_vel-old.joint_vel)/self.dt
         foot_vel=[]
         for body,offset in self.feet:
             radius=quat_apply(rotations[:,body],offset.expand(len(action),-1))
             foot_vel.append((velocities[:,body]+torch.cross(angular[:,body],radius,dim=-1))[:,:2])
         foot_vel=torch.stack(foot_vel,1)
-        contact=contact_logits[:,:2].sigmoid() if feet_contact is None else feet_contact
-        collision=self.collision_history*contact_logits[:,2].sigmoid() if self_collision is None else self_collision
+        contact=contact_logits[:,:2].sigmoid()
+        collision=self.collision_history*contact_logits[:,2].sigmoid()
         active=command[:,:2].norm(dim=-1)+command[:,2].abs()>.1
         return {'tracking':torch.where(delayed,torch.zeros_like(tracking),tracking),
                 'root_height':3.5*height*delayed,

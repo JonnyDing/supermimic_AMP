@@ -45,19 +45,6 @@ def mat_to_quat(m: torch.Tensor) -> torch.Tensor:
     return q * torch.where(q[..., :1] < 0, -1.0, 1.0)
 
 
-def axis_angle_to_mat(axis: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
-    """Rodrigues for a fixed unit axis (..., 3) and angle (...)."""
-    x, y, z = axis.unbind(-1)
-    c, s = torch.cos(angle), torch.sin(angle)
-    C = 1 - c
-    return torch.stack(
-        (
-            c + x * x * C, x * y * C - z * s, x * z * C + y * s,
-            y * x * C + z * s, c + y * y * C, y * z * C - x * s,
-            z * x * C - y * s, z * y * C + x * s, c + z * z * C,
-        ),
-        dim=-1,
-    ).reshape(angle.shape + (3, 3))  # fmt: skip
 
 
 def so3_exp(v: torch.Tensor) -> torch.Tensor:
@@ -93,11 +80,6 @@ def skew(v: torch.Tensor) -> torch.Tensor:
     return torch.stack((o, -z, y, z, o, -x, -y, x, o), -1).reshape(v.shape[:-1] + (3, 3))
 
 
-def rot_angle_sq(Ra: torch.Tensor, Rb: torch.Tensor) -> torch.Tensor:
-    """Squared geodesic angle between rotations, differentiable (via acos of trace, clamped)."""
-    tr = (Ra * Rb).sum((-1, -2))  # trace(Ra^T Rb)
-    cos = torch.clamp((tr - 1) / 2, -1 + 1e-6, 1 - 1e-6)
-    return torch.acos(cos) ** 2
 
 
 def yaw_mat(R: torch.Tensor) -> torch.Tensor:
@@ -112,15 +94,3 @@ def yaw_mat(R: torch.Tensor) -> torch.Tensor:
 def mat_to_6d(R: torch.Tensor) -> torch.Tensor:
     """First two columns, flattened (6D continuous rotation representation)."""
     return R[..., :, :2].reshape(R.shape[:-2] + (6,))
-
-
-def quat_slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-    dot = (q0 * q1).sum(-1, keepdim=True)
-    q1 = torch.where(dot < 0, -q1, q1)
-    dot = dot.abs().clamp(max=1.0)
-    theta = torch.acos(dot)
-    s = torch.sin(theta)
-    t = t[..., None]
-    w0 = torch.where(s < 1e-6, 1 - t, torch.sin((1 - t) * theta) / (s + 1e-12))
-    w1 = torch.where(s < 1e-6, t, torch.sin(t * theta) / (s + 1e-12))
-    return F.normalize(w0 * q0 + w1 * q1, dim=-1)

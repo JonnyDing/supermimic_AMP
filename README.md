@@ -7,12 +7,12 @@ World-model reinforcement learning for G1 velocity tracking and fall recovery, b
 ## Current implementation
 
 - Real transitions populate a sequence replay buffer and train the world model.
-- The actor optimizes imagined task and AMP rewards with critic bootstrapping and a frozen teacher anchor.
+- The actor optimizes imagined task and AMP rewards with critic bootstrapping and no teacher anchor.
 - The discriminator trains separately on real policy/expert transitions with a least-squares objective and gradient penalty. During imagination its parameters are frozen while input gradients remain available.
 - One policy produces 29 joint actions from four observation frames (384 inputs), at 50 Hz.
-- Training currently supports `Unitree-G1-AMP-Flat`, one CUDA GPU, and TensorBoard. Default settings use FP32, compilation, and an imagination horizon of 8.
+- Training currently supports `Unitree-G1-AMP-Flat`, one CUDA GPU, and TensorBoard. Default settings use BF16 network math, compilation, and an imagination horizon of 32.
 
-PPO optimizers and training runners have been removed. The remaining `rsl_rl` code provides compatible networks and normalization; its `OnPolicyRunner` placeholder exists only for mjlab imports. This implementation uses existing policies for initialization and teacher anchoring, rather than training from scratch.
+PPO optimizers and training runners have been removed. The remaining `rsl_rl` code provides compatible networks and normalization; its `OnPolicyRunner` placeholder exists only for mjlab imports. New runs initialize all networks from scratch. No pretrained policy, world model, discriminator or teacher checkpoint is loaded.
 
 ## Environment
 
@@ -55,26 +55,34 @@ The committed inference/export checkpoint is:
 logs/rsl_rl/g1_supermimic_locomotion/2026-10-27_11-13-57_wmrl_amp/model_14000.pt
 ```
 
-The current trainer also expects these initialization assets at fixed paths:
+This historical checkpoint remains usable for playback/export. New training does not depend on it or any other file under `logs/`. Motion reference data is still required for AMP and recovery resets.
 
-- `logs/rsl_rl/g1_amp_locomotion/2026-10-24_13-24-33/model_66600.pt`
-- `logs/supermimic/p3_online_conservative_20261026/actor_final.pt`
+## Train from scratch (4090 environments)
 
-The first supplies the teacher and original AMP state; the second supplies the initial policy/world-model learning state. These historical assets are not supplied by the single published checkpoint and must be restored before starting a new training run. Resume also checks its recorded source files. `model_14000.pt` alone supports policy loading and export, not the complete training setup.
+Training uses one seed, **42** by default; optional evaluation uses the same seed. The default CLI configuration uses **4090 parallel environments** and the reference learning flow:
 
-## Train
+- World model: three 2048-wide hidden layers, eight-step prediction loss, 10 optimizer updates of 2048 windows per iteration.
+- Actor: 32-step BPTT, 1024 imagination starts per update. Critic: imagined GAE targets, five epochs and four minibatches.
+- Effective batches use gradient accumulation: WM microbatch 2048 and actor microbatch 1024, both full batches by default. Network matmuls default to BF16; simulation and geometry remain FP32. Parameters update once per effective batch.
+- Actor observation and WM input/output statistics update from real transitions in the training partition. The critic has independent running input normalization. Statistics stay fixed during BPTT.
+- Every imagined observation frame uses the real task's observation-noise configuration. ONNX inference remains deterministic.
+- Initial replay: 64 steps from the random initial policy plus exploration noise; 500 model-only iterations of 10 WM updates each count toward the total iteration budget, followed by joint actor/critic updates without separate critic warmup. No pretrained policy or teacher is loaded.
+- Actor, WM and critic learning rates follow the reference cosine schedule: initial `2e-4`, final ratio 0.03 after 250000 total iterations. Exploration standard deviation is 0.1.
 
-After restoring the required assets:
+Replay retains 256 steps for this GPU configuration; the tracking reference uses 1000. Tracking-specific goal encoders are not part of this velocity/AMP task. These settings restore the learning mechanisms but do not establish convergence on the modified task.
 
 ```bash
 python scripts/train.py Unitree-G1-AMP-Flat \
-  --gpu-ids 0 \
-  --env.scene.num-envs=512 \
+  --env.scene.num-envs=4090 \
   --agent.max-iterations=14000 \
-  --agent.seed=2031 \
-  --agent.run-name=wmrl_amp \
+  --agent.run-name=wmrl_scratch \
   --agent.save-interval=1000
 ```
+
+BF16 and full 1024-sample actor updates are now the defaults for both scratch training and resume. No precision or microbatch options are required. Older checkpoints' TF32/1024-WM/256-actor runtime settings use the new defaults, while their networks, optimizers and other learning settings are restored.
+
+Training uses policy actions plus exploration noise directly, with no action magnitude threshold, numerical reset retries, zero substitutions, imagination trajectory rejection or runtime parameter audits. Episode termination masks, the reference gradient clipping and AMP gradient penalty remain part of the learning algorithm.
+
 
 Logs are written to `logs/rsl_rl/g1_supermimic_locomotion/<timestamp>_<run_name>/`. View them with:
 
@@ -82,26 +90,26 @@ Logs are written to `logs/rsl_rl/g1_supermimic_locomotion/<timestamp>_<run_name>
 tensorboard --logdir logs/rsl_rl/g1_supermimic_locomotion
 ```
 
-Use `--help` for options. `--agent.*` retains the existing CLI schema; WMRL options use `--supermimic.*`. Unsupported legacy algorithm overrides raise an error. `--backend supermimic` is an alias for the default `wmrl` backend.
+Use `--supermimic.wm-microbatch` and `--supermimic.actor-microbatch` to adjust memory while retaining the effective batches. `--supermimic.utd=0.4` collects 2.5 vector steps per update on average. GPU 0 is selected by default; an explicit list uses `--gpu-ids '[0]'`. Use `--help` for options. `--agent.*` retains the existing CLI schema; WMRL options use `--supermimic.*`. Unsupported legacy algorithm overrides raise an error. `--backend supermimic` is an alias for the default `wmrl` backend.
 
 | Artifact | Purpose |
 |---|---|
 | `model_<update>.pt` | Networks, normalization and learning state, without replay; usable for playback/export |
 | `actor_final.pt` | Final checkpoint with the same payload structure as the final numbered checkpoint; not actor-only |
-| `last.pt` | Full trainer resume checkpoint, including replay |
+| `last.pt` | Latest networks, optimizers and statistics; replay is recollected on resume |
 
-To resume, retain the original environment/algorithm settings and specify a larger total update count:
+To resume, use a new scratch run’s `last.pt` (`fast_schema=3`) and retain the original environment/algorithm settings and specify a larger total update count:
 
 ```bash
 python scripts/train.py Unitree-G1-AMP-Flat \
-  --env.scene.num-envs=512 --agent.seed=2031 \
+  --env.scene.num-envs=4090 \
   --agent.max-iterations=20000 \
   --agent.resume=True \
   --agent.load-run=YOUR_RUN_DIRECTORY \
   --agent.load-checkpoint=last.pt
 ```
 
-Resume restores learning state, replay and RNG, then starts fresh simulator episodes; it is not bitwise simulator continuation.
+Resume restores learning state, normalization, exploration progress and RNG, skips completed model warmup, then starts fresh simulator episodes and recollects at least 64 steps of replay. Older schema 3 files with replay remain loadable. It is not bitwise simulator continuation. Schema 1/2 training files are rejected: their frozen statistics, critic coordinates and architecture do not describe the corrected learning state. Their actor policies remain loadable for playback/export. Scratch convergence must be assessed with a fresh run using the corrected failure sampling.
 
 ## Playback, export and sim2sim
 
@@ -146,8 +154,4 @@ Operator sequence: START → nominal pose → A → policy; B/SELECT stops. Runt
 | `src/tasks/amp_loco/` | G1 task and environment configuration |
 | `deploy/` | ONNX assets and native robot transport |
 
-```bash
-python -m unittest discover -s supermimic/tests -v
-```
-
-The cleanup passed 26 tests, including ONNX parity, plus loading/inference of the published checkpoint. Native C++ rebuild was not verified in the cleanup environment because pybind11 was unavailable. Earlier stage trainers and reports remain for historical experiments; [supermimic/README.md](supermimic/README.md) documents that history, not an additional supported training backend.
+Use `--supermimic.evaluate=True` for fixed-scenario evaluation after training. AMP returns use the candidate discriminator and are not comparable across checkpoints. Unit tests, temporary benchmark tools and historical diagnostic reports have been removed; the training, playback, export and fixed-scenario evaluation entry points remain available.

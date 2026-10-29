@@ -1,1 +1,1 @@
-"""SuperMimic migration: physics, world-model diagnostics and experimental BPTT."""
+"""World-model reinforcement learning with AMP and recovery."""

@@ -1,1 +1,1 @@
-"""P1: mjlab 1.2 simulator, robot metadata and actual context readers."""
+"""mjlab physical-state collection and terminal observation capture."""

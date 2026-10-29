@@ -1,3 +1,0 @@
-numpy
-mujoco==3.16.0
-onnxruntime

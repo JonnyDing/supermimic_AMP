@@ -51,12 +51,3 @@ def integrate(x, increments):
                              mat_to_quat(rotation @ so3_exp(dr)),
                              s.root_lin_vel_w + mv(rotation, dv),
                              s.root_ang_vel_w + mv(rotation, dw), s.joint_pos + dq, s.joint_vel + dqd))
-
-
-def constant_velocity(x, dt):
-    s = unpack(x)
-    r = quat_to_mat(s.root_quat_wxyz)
-    return pack(PhysicsState(s.root_pos + s.root_lin_vel_w * dt,
-                             mat_to_quat(so3_exp(s.root_ang_vel_w * dt) @ r),
-                             s.root_lin_vel_w, s.root_ang_vel_w,
-                             s.joint_pos + s.joint_vel * dt, s.joint_vel))

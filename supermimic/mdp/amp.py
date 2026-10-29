@@ -1,10 +1,11 @@
-"""Differentiable target AMP features and reward; native PPO path stays unchanged."""
+"""Differentiable AMP reward and independently trained motion discriminator."""
 import copy
 from pathlib import Path
 import numpy as np
 import torch
 from mjlab.utils.lab_api.math import quat_apply_inverse, quat_conjugate, quat_mul, matrix_from_quat
 from rsl_rl.modules.discriminator import Discriminator
+from rsl_rl.utils.utils import Normalizer
 from supermimic.core.state import unpack
 from supermimic.mdp.kinematics import RobotKinematics
 
@@ -61,8 +62,11 @@ class ExpertPairs:
 class DifferentiableAMP:
     def __init__(self, checkpoint, device):
         self.discriminator=Discriminator(390,.1,[1024,512,256],device,task_reward_lerp=.75)
-        self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-        self.normalizer=copy.deepcopy(checkpoint['amp_normalizer'])
+        self.normalizer = Normalizer(195)
+        self.normalization_mode = 'raw' if checkpoint is None else checkpoint.get('amp_normalization', 'legacy_normalized')
+        if checkpoint is not None:
+            self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+            self.normalizer=copy.deepcopy(checkpoint['amp_normalizer'])
         self.device=device
 
     def reward(self, state, next_state, task_reward):
@@ -98,13 +102,14 @@ class DiscriminatorUpdates:
         penalty=d.compute_grad_pen(expert.detach(),next_expert.detach(),lambda_=10)
         self.optimizer.zero_grad(set_to_none=True)
         (classification+penalty).backward()
-        torch.nn.utils.clip_grad_norm_(d.parameters(),1.,error_if_nonfinite=True)
+        torch.nn.utils.clip_grad_norm_(d.parameters(),1.)
         self.optimizer.step(); self.optimizer.zero_grad(set_to_none=True)
-        # Match native normalizer update semantics (normalized current features).
+        # Scratch runs estimate raw feature statistics; old checkpoints retain their convention.
+        samples = (real, next_real, expert, next_expert) if self.amp.normalization_mode == 'raw' else (s, e)
         if hasattr(norm,'update_tensor'):
-            norm.update_tensor(s); norm.update_tensor(e)
+            for x in samples: norm.update_tensor(x)
         else:
-            norm.update(s.cpu().numpy()); norm.update(e.cpu().numpy())
+            for x in samples: norm.update(x.cpu().numpy())
         self.updates+=1
         metrics={'discriminator_loss':classification.detach(),'gradient_penalty':penalty.detach(),
                  'policy_score':policy_score.detach().mean(),'expert_score':expert_score.detach().mean()}

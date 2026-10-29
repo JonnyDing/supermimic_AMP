@@ -1,4 +1,4 @@
-"""Bridge the original scripts/train.py interface to the optimized P4 trainer."""
+"""Configure the WMRL training entry point."""
 from dataclasses import dataclass,asdict
 from pathlib import Path
 from typing import Literal
@@ -7,28 +7,36 @@ from mjlab.utils.os import get_checkpoint_path
 
 @dataclass
 class SuperMimicConfig:
-    batch_size: int = 512
-    wm_batch_size: int = 512
+    batch_size: int = 1024
+    wm_batch_size: int = 2048
     buffer_steps: int = 256
     warmup_steps: int = 64
-    horizon: int = 8
-    wm_batches: int = 2
-    critic_warmup: int = 40
+    horizon: int = 32
+    wm_batches: int = 10
+    wm_pretrain_updates: int = 500
+    wm_width: int = 2048
+    exploration_initial: float = 0.1
+    exploration_final: float = 0.1
+    exploration_decay_updates: int = 5000
+    wm_microbatch: int = 2048
+    actor_microbatch: int = 1024
+    lr_decay_updates: int = 250000
+    utd: float = 0.4
     discriminator_lr: float = 1e-5
-    precision: Literal['fp32','tf32','bf16'] = 'fp32'
+    precision: Literal['fp32','tf32','bf16'] = 'bf16'
     compile: bool = True
     log_every: int = 50
     terminal_format: Literal['pretty','json'] = 'pretty'
-    audit_every: int = 1000
     resume_refill_steps: int = 32
     evaluate: bool = False
-    test_seeds: tuple[int,...] = (82,83,84)
+    bootstrap_only: bool = False
     seconds: int = 20
 
 
 def configure_defaults(task_id,env,agent):
     if task_id!='Unitree-G1-AMP-Flat':
         raise ValueError('SuperMimic currently supports Unitree-G1-AMP-Flat only')
+    env.scene.num_envs=4090
     env.events.pop('push_robot',None)
     env.curriculum={}
     env.episode_length_s=5.
@@ -36,8 +44,8 @@ def configure_defaults(task_id,env,agent):
     agent.save_interval=1000
     agent.load_checkpoint='last.pt'
     agent.num_steps_per_env=2
-    agent.algorithm.learning_rate=1e-7
-    agent.algorithm.num_learning_epochs=2
+    agent.algorithm.learning_rate=2e-4
+    agent.algorithm.num_learning_epochs=5
     agent.algorithm.schedule='fixed'
     agent.upload_model=False
     return env,agent
@@ -50,7 +58,7 @@ def build_arguments(task_id,cfg,log_dir,device):
     if cfg.motion_file:raise ValueError('--motion-file is not used by the AMP Flat SuperMimic backend')
     if cfg.agent.logger!='tensorboard':raise ValueError('SuperMimic compatibility entry currently supports --agent.logger=tensorboard')
     if tuple(cfg.agent.actor.hidden_dims)!=(512,256,128) or tuple(cfg.agent.critic.hidden_dims)!=(512,256,128):
-        raise ValueError('Warm-start checkpoint requires the existing 512/256/128 policy architecture')
+        raise ValueError('Policy export compatibility requires the existing 512/256/128 policy architecture')
     if cfg.agent.clip_actions is not None:
         raise ValueError('SuperMimic preserves the existing unclipped executed-action contract; clip_actions must be None')
     if cfg.agent.num_steps_per_env<1:raise ValueError('--agent.num-steps-per-env must be positive')
@@ -70,18 +78,19 @@ def build_arguments(task_id,cfg,log_dir,device):
     agent,sm=cfg.agent,cfg.supermimic
     args=['--output',str(log_dir),'--updates',str(agent.max_iterations),'--device',device,
           '--checkpoint-every',str(agent.save_interval),'--logger','tensorboard','--checkpoint-prefix','model',
-          '--log-every',str(sm.log_every),'--audit-every',str(sm.audit_every),
+          '--log-every',str(sm.log_every),
           '--terminal-format',sm.terminal_format,
           '--resume-refill-steps',str(sm.resume_refill_steps),'--seconds',str(sm.seconds),
-          '--test-seeds',*[str(v) for v in sm.test_seeds]]
+          '--test-seeds',str(agent.seed)]
     values={'num_envs':cfg.env.scene.num_envs,'seed':agent.seed,'actor_lr':agent.algorithm.learning_rate,
-            'utd':1./agent.num_steps_per_env,'critic_epochs':agent.algorithm.num_learning_epochs,
+            'utd':sm.utd if agent.num_steps_per_env==reference.num_steps_per_env else 1./agent.num_steps_per_env,'critic_epochs':agent.algorithm.num_learning_epochs,
             'critic_minibatches':agent.algorithm.num_mini_batches,'gamma':agent.algorithm.gamma,
             'gae_lambda':agent.algorithm.lam}
-    values.update({k:v for k,v in asdict(sm).items() if k in ('batch_size','wm_batch_size','buffer_steps','warmup_steps','horizon','wm_batches','critic_warmup','discriminator_lr','precision')})
+    values.update({k:v for k,v in asdict(sm).items() if k in ('batch_size','wm_batch_size','buffer_steps','warmup_steps','horizon','wm_batches','wm_pretrain_updates','wm_width','exploration_initial','exploration_final','exploration_decay_updates','wm_microbatch','actor_microbatch','lr_decay_updates','discriminator_lr','precision')})
     for key,value in values.items():args.extend(['--'+key.replace('_','-'),str(value)])
     args.append('--compile' if sm.compile else '--no-compile')
     if sm.evaluate:args.append('--evaluate')
+    if sm.bootstrap_only:args.append('--bootstrap-only')
     if agent.resume:
         path=get_checkpoint_path(Path(log_dir).parent,agent.load_run,agent.load_checkpoint)
         args.extend(['--resume',str(path)])
@@ -90,7 +99,6 @@ def build_arguments(task_id,cfg,log_dir,device):
 
 def run(task_id,cfg,log_dir,device):
     from supermimic.train_fast import main
-    if cfg.enable_nan_guard:cfg.env.sim.nan_guard.enabled=True
     args=build_arguments(task_id,cfg,log_dir,device)
     print('[INFO] Backend: WMRL / SuperMimic (online WM + AMP + recovery BPTT)',flush=True)
     print(f'[INFO] Checkpoints: {log_dir}/model_<iteration>.pt; full resume: last.pt',flush=True)

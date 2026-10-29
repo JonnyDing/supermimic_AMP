@@ -1,8 +1,4 @@
-"""P3 upright velocity ablation: four existing task terms, no AMP/recovery.
-
-Weights/stds match AMP_mjlab for velocity, action rate and soft joint limits.
-Reward is evaluated on post-integration state in both imagination and evaluation.
-"""
+"""Velocity task observations, reward terms and differentiable survival."""
 import math
 import torch
 from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
@@ -20,8 +16,20 @@ class VelocityHeads:
         self.limits = robot.data.soft_joint_pos_limits[0].clone()
         self.dt = env.step_dt
         terms = env.observation_manager._group_obs_term_cfgs['actor']
-        if terms[3].params.get('biased', False) or any(t.scale is not None or t.clip is not None or t.delay_max_lag for t in terms):
-            raise ValueError('P3 requires current unscaled, unbiased Flat actor schema')
+        # Channel-wise observation noise from the configured task.
+        sizes=(3,3,3,29,29,29)
+        lower=[];upper=[]
+        enabled=env.cfg.observations['actor'].enable_corruption
+        for term,size in zip(terms,sizes,strict=True):
+            noise=term.noise if enabled else None
+            lower.extend([0. if noise is None else noise.n_min]*size)
+            upper.extend([0. if noise is None else noise.n_max]*size)
+        self.noise_lower=torch.tensor(lower,device=env.device)
+        self.noise_upper=torch.tensor(upper,device=env.device)
+
+    def noisy_observation(self, packed, action, command):
+        obs=self.observation(packed,action,command)
+        return obs+self.noise_lower+(self.noise_upper-self.noise_lower)*torch.rand_like(obs)
 
     def observation(self, packed, action, command):
         state = unpack(packed)
