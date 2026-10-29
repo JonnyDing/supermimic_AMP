@@ -218,7 +218,9 @@ The bundle contains `policy.onnx`, `policy.json` and `scene.zip`. Normalization 
 
 ## Robot deployment
 
-Deployment test video: [Watch the deployment test](video/example.mp4).
+Deployment test (click the animated preview to open the original MP4):
+
+[![Deployment test video preview](video/example.gif)](video/example.mp4)
 
 The AMP Flat deployment bundle uses Python ONNX inference and native Unitree SDK2 C++ transport. On the robot computer, build the SDK/DDS extension as described in [deploy/README.md](deploy/README.md), then run:
 
