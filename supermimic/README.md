@@ -16,7 +16,7 @@ python scripts/train.py Unitree-G1-Rough \
   --agent.max-iterations=14000 --agent.run-name=wmrl_scratch
 ```
 
-从仓库根目录、按主 README 完成环境配置后执行。默认 BF16、开启编译、32 步想象，首次编译可能需要数分钟；`--supermimic.compile=False` 可关闭编译。默认总轮数为 100001，包含 500 轮模型预训练。新训练随机初始化，不加载预训练策略或 teacher。`rsl_rl` 仍承担网络、归一化和导入兼容，并未完全移除。
+从仓库根目录、按主 README 完成环境配置后执行。默认 FP32、开启编译、32 步想象，首次编译可能需要数分钟；`--supermimic.compile=False` 可关闭编译。默认总轮数为 100001，包含 500 轮模型预训练。新训练随机初始化，不加载预训练策略或 teacher。`rsl_rl` 仍承担网络、归一化和导入兼容，并未完全移除。
 
 | 模块 | 职责 |
 |---|---|

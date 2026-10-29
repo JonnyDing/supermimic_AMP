@@ -1,0 +1,18 @@
+{
+  "policy": "/home/ubuntu/Sia/AMP_mjlab/deploy/wmrl_66000/policy.onnx",
+  "command": [
+    0.5,
+    0.0,
+    0.0
+  ],
+  "simulated_seconds": 60.0,
+  "wall_seconds": 2.5819854580040555,
+  "min_pelvis_height": 0.7469072303618429,
+  "final_pelvis_height": 0.773849340593937,
+  "below_05m_fraction": 0.0,
+  "velocity_xy_rmse": 0.1881029899810748,
+  "action_abs_max": 3.150376081466675,
+  "physics": "native_mujoco_cpu",
+  "initialization": "nominal_pose",
+  "randomization": false
+}

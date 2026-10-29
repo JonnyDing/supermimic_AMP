@@ -118,10 +118,10 @@ python scripts/train.py Unitree-G1-Flat \
 | AMP discriminator learning rate | `--supermimic.discriminator-lr=1e-5`, AMP tasks only |
 | Exploration standard deviation | 0.1 |
 | Collection ratio | `--supermimic.utd=0.4`, averaging 2.5 vector steps collected per update |
-| Precision / compilation | BF16 / enabled; simulation and geometry remain FP32 |
+| Precision / compilation | FP32 / enabled; simulation and geometry remain FP32 |
 | GPU / logger | GPU 0 / TensorBoard |
 
-Common overrides: `--env.scene.num-envs=256` changes parallelism; `--supermimic.wm-microbatch=512 --supermimic.actor-microbatch=256` reduces network-training memory; `--supermimic.compile=False` skips initial compilation; `--supermimic.precision=fp32` selects FP32. Initial compilation can take several minutes. Environment count, network width and batches all affect memory; the default environment count is not a guarantee of fitting every GPU.
+Common overrides: `--env.scene.num-envs=256` changes parallelism; `--supermimic.wm-microbatch=512 --supermimic.actor-microbatch=256` reduces network-training memory; `--supermimic.compile=False` skips initial compilation; `--supermimic.precision=bf16` selects BF16. Initial compilation can take several minutes. Environment count, network width and batches all affect memory; the default environment count is not a guarantee of fitting every GPU.
 
 Actor and WM running statistics use real data from the training partition. The critic has independent input normalization; these statistics stay fixed during BPTT. Policy actions execute directly with exploration noise. Termination masks, gradient clipping and AMP gradient penalties remain. `--agent.algorithm.*` exposes fields consumed by WMRL; PPO clip, KL and entropy options are absent.
 
@@ -217,6 +217,8 @@ python scripts/sim2sim.py Unitree-G1-AMP-Flat \
 The bundle contains `policy.onnx`, `policy.json` and `scene.zip`. Normalization is embedded in ONNX; export checks PyTorch/ONNX parity on 100 inputs. For headless execution, use `--viewer none`; optionally add `--output /tmp/sim2sim.json` to save measurements. The current exporter and sim2sim use the 384-input AMP Flat contract and do not support the other three tasks.
 
 ## Robot deployment
+
+Deployment test video: [Watch the deployment test](video/example.mp4).
 
 The AMP Flat deployment bundle uses Python ONNX inference and native Unitree SDK2 C++ transport. On the robot computer, build the SDK/DDS extension as described in [deploy/README.md](deploy/README.md), then run:
 

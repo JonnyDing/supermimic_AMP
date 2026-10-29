@@ -118,10 +118,10 @@ python scripts/train.py Unitree-G1-Flat \
 | AMP 判别器学习率 | `--supermimic.discriminator-lr=1e-5`，仅 AMP 任务使用 |
 | 探索噪声标准差 | 0.1 |
 | 采集比例 | `--supermimic.utd=0.4`，平均每轮更新采集 2.5 个向量步 |
-| 精度 / 编译 | BF16 / 开启；仿真和几何计算仍为 FP32 |
+| 精度 / 编译 | FP32 / 开启；仿真和几何计算仍为 FP32 |
 | GPU / 日志 | GPU 0 / TensorBoard |
 
-常用调整：`--env.scene.num-envs=256` 调整并行环境数；`--supermimic.wm-microbatch=512 --supermimic.actor-microbatch=256` 减少网络训练显存；`--supermimic.compile=False` 跳过首次编译；`--supermimic.precision=fp32` 改用 FP32。首次编译可能需要数分钟。环境数、网络宽度及 batch 都会影响显存，默认环境数并不保证适合所有 GPU。
+常用调整：`--env.scene.num-envs=256` 调整并行环境数；`--supermimic.wm-microbatch=512 --supermimic.actor-microbatch=256` 减少网络训练显存；`--supermimic.compile=False` 跳过首次编译；`--supermimic.precision=bf16` 改用 BF16。首次编译可能需要数分钟。环境数、网络宽度及 batch 都会影响显存，默认环境数并不保证适合所有 GPU。
 
 Actor 和 WM 的运行统计来自训练分区的真实数据；critic 使用独立输入归一化，BPTT 期间固定这些统计。策略动作叠加探索噪声后直接执行。训练保留终止掩码、梯度裁剪及 AMP 梯度惩罚。`--agent.algorithm.*` 仅包含当前 WMRL 使用的字段，PPO 的 clip、KL 和 entropy 参数已移除。
 
@@ -217,6 +217,8 @@ python scripts/sim2sim.py Unitree-G1-AMP-Flat \
 导出包含 `policy.onnx`、`policy.json` 与 `scene.zip`；ONNX 内嵌归一化，导出器用 100 组输入核对 PyTorch/ONNX 数值一致性。无窗口运行使用 `--viewer none`，可加 `--output /tmp/sim2sim.json` 保存指标。现有导出器和 sim2sim 的 384 维 AMP Flat 输入协议不适用于其他三个任务。
 
 ## 机器人部署
+
+部署测试视频：[观看部署测试](video/example.mp4)。
 
 AMP Flat 导出的部署包通过 Python ONNX 推理和原生 Unitree SDK2 C++ 通信运行。在机器人计算机上按 [deploy/README.md](deploy/README.md) 编译 SDK/DDS 扩展后执行：
 

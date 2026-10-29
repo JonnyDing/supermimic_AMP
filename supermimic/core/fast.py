@@ -10,7 +10,7 @@ from supermimic.mdp.amp import body_features
 
 class FastP4:
     def __init__(self,wm,actor,normalizer,critic,heads,amp,features,
-                 compile=False,precision='bf16',horizon=32,gamma=.99):
+                 compile=False,precision='fp32',horizon=32,gamma=.99):
         self.wm,self.actor,self.normalizer,self.critic=wm,actor,normalizer,critic
         self.heads,self.amp,self.features=heads,amp,features
         self.precision,self.horizon,self.gamma=precision,horizon,gamma

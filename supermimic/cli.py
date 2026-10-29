@@ -27,7 +27,7 @@ class SuperMimicConfig:
     lr_decay_updates: int = 250000
     utd: float = 0.4
     discriminator_lr: float = 1e-5
-    precision: Literal['fp32','tf32','bf16'] = 'bf16'
+    precision: Literal['fp32','tf32','bf16'] = 'fp32'
     compile: bool = True
     log_every: int = 50
     terminal_format: Literal['pretty','json'] = 'pretty'

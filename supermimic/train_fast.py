@@ -26,7 +26,7 @@ DEFAULTS={'num_envs':4090,'batch_size':1024,'wm_batch_size':2048,'buffer_steps':
           'horizon':32,'utd':.4,'wm_batches':10,'critic_epochs':5,'critic_minibatches':4,
           'wm_pretrain_updates':500,'wm_width':2048,'exploration_initial':.1,'exploration_final':.1,'exploration_decay_updates':5000,
           'wm_microbatch':2048,'actor_microbatch':1024,'lr_decay_updates':250000,
-          'gamma':.99,'gae_lambda':.95,'actor_lr':2e-4,'discriminator_lr':1e-5,'precision':'bf16','seed':42,'compile':True}
+          'gamma':.99,'gae_lambda':.95,'actor_lr':2e-4,'discriminator_lr':1e-5,'precision':'fp32','seed':42,'compile':True}
 
 
 def arguments(argv=None):
